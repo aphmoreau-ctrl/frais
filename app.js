@@ -35,7 +35,8 @@ const day = d => db.get('days', d) || { id: d, done: {}, extra: [], photos: {}, 
 function routine(d) {
   const w = new Date(d + 'T12:00').getDay();
   const base = (cfg().routine[w] || []).map(x => ({ ...x }));
-  return base.concat(day(d).extra || []).sort((a, b) => a.h.localeCompare(b.h));
+  const auto = inFetes(d) && db.all('fetes').length ? [{ id: 'fetes-auto', t: 'Pré-commandes fêtes', h: '14:00', go: 'fetes' }] : [];
+  return base.concat(auto, day(d).extra || []).sort((a, b) => a.h.localeCompare(b.h));
 }
 function markTask(go) {
   const d = today(), dd = day(d);
@@ -43,7 +44,7 @@ function markTask(go) {
   if (t) db.put('days', { ...dd, done: { ...dd.done, [t.id]: Date.now() } });
 }
 A.toggleTask = (d, id) => { const dd = day(d); const done = { ...dd.done }; done[id] ? delete done[id] : (done[id] = Date.now()); db.put('days', { ...dd, done }); };
-const GO = { tournee: '#/tournee', ruptures: '#/ruptures', bilan: '#/bilan', journal: '#/journal', libre: '' };
+const GO = { tournee: '#/tournee', ruptures: '#/ruptures', bilan: '#/bilan', journal: '#/journal', fetes: '#/fetes', presents: '#/presents', libre: '' };
 
 // ---------- Alertes ----------
 function alerts() {
@@ -59,7 +60,7 @@ function alerts() {
   db.all('actions').filter(a => a.statut !== 'fait' && a.echeance && a.echeance < t).forEach(a => out.push(['warn', `Échéance dépassée : ${esc(a.titre)}`, '#/actions']));
   const lb = (db.get('meta', 'backup') || {}).ts;
   if (!lb || Date.now() - lb > 30 * 864e5) out.push(['acc', lb ? 'Sauvegarde mensuelle à faire' : 'Aucune sauvegarde encore faite', '#/r-donnees']);
-  return out;
+  return out.concat(alertsV2());
 }
 
 // ---------- Mise en page ----------
@@ -110,8 +111,10 @@ V['saisir'] = () => hdr('Saisir', 'l\'heure et le rayon se remplissent tout seul
   `<div class="tiles"><a class="tile main" href="#/tournee">Démarrer ma tournée<small>Les rayons s'enchaînent dans ton ordre de passage</small></a>
   <a class="tile" href="#/ruptures">Rupture<small>scan ou favori</small></a><button class="tile" onclick="A.note()">Note<small>dictée possible</small></button>
   <button class="tile" onclick="A.photoNote()">Photo<small>avec une note</small></button><a class="tile" href="#/suivis">Suivis<small>problèmes ouverts</small></a>
+  <a class="tile" href="#/presents">Absence<small>sans motif</small></a><a class="tile" href="#/presents">Consigne<small>par rayon</small></a>
+  <a class="tile" href="#/fetes">Fêtes<small>pré-commandes</small></a><a class="tile" href="#/carnet">Carnet des fêtes<small>à noter le soir</small></a>
   <a class="tile main" href="#/bilan" style="background:var(--card);color:var(--ink);border-color:var(--line)">Bilan de fin de journée<small style="color:var(--muted)">compléter ce qui manque</small></a></div>
-  <div class="small muted mt">Casse, lots du soir et absences arrivent avec les versions suivantes.</div><div class="mt">${lk('#/raccourcis', 'Raccourcis iPhone et Siri')}</div>`;
+  <div class="small muted mt">Casse et lots du soir arrivent avec la version 4.</div><div class="mt">${lk('#/raccourcis', 'Raccourcis iPhone et Siri')}</div>`;
 
 // ---------- Tournée guidée ----------
 let T = null;
@@ -348,12 +351,12 @@ A.planS = id => { const t = $('#pt').value.trim(); if (!t) return; db.put('plan'
 A.planD = id => { if (confirm('Supprimer cette étape ?')) { db.del('plan', id); A.close(); } };
 
 // ---------- Plus et réglages ----------
-V['plus'] = () => hdr('Plus') + `<div class="list">${lk('#/journal', 'Journal de bord')}${lk('#/actions', 'Actions')}${lk('#/suivis', 'Suivis')}${lk('#/raccourcis', 'Raccourcis iPhone et Siri')}${lk('#/reglages', 'Réglages')}</div><div class="small muted mt">Version 1 · ${db.MODE === 'local' ? 'mode essai sur cet appareil' : 'synchronisée'} · appareil ${esc(db.DEV)}</div>`;
+V['plus'] = () => hdr('Plus') + `<div class="list">${lk('#/plan', 'Mon plan · novembre à juin')}${lk('#/fetes', 'Fêtes et retraits')}${lk('#/journal', 'Journal de bord')}${lk('#/actions', 'Actions')}${lk('#/suivis', 'Suivis')}${lk('#/raccourcis', 'Raccourcis iPhone et Siri')}${lk('#/reglages', 'Réglages')}</div><div class="small muted mt">Version 2 · ${db.MODE === 'local' ? 'mode essai sur cet appareil' : 'synchronisée'} · appareil ${esc(db.DEV)}</div>`;
 V['raccourcis'] = () => { const base = location.href.split('#')[0]; return hdr('Raccourcis iPhone', 'saisir sans passer par les menus', 1) + `<div class="card">Pour chaque raccourci : ouvre l'app <b style="font-weight:600">Raccourcis</b>, touche +, ajoute l'action « Ouvrir les URL » et colle l'adresse ci-dessous. Donne-lui le nom indiqué : tu pourras le lancer par Siri ou l'ajouter à l'écran d'accueil.</div><div class="list mt">${[['Rupture', '#/ruptures'], ['Note frais', '#/note'], ['Tournée', '#/tournee'], ['Bilan', '#/bilan']].map(([n, h]) => `<div class="row" style="display:block"><div>« Dis Siri, ${n.toLowerCase()} »</div><div class="small muted" style="word-break:break-all">${esc(base + h)}</div><button class="chip" style="margin-top:6px" onclick="A.copy('${esc(base + h)}')">Copier l'adresse</button></div>`).join('')}</div>`; };
 A.copy = t => { navigator.clipboard && navigator.clipboard.writeText(t).then(() => toast('Adresse copiée'), () => toast(t)); };
 V['note'] = () => { setTimeout(() => A.note(), 50); location.replace('#/'); return ''; };
 
-V['reglages'] = () => hdr('Réglages', '', 1) + `<h2>Référentiel</h2><div class="list">${lk('#/r-rayons', 'Rayons et ordre de tournée', `<span class="muted">${rayons().length}</span>`)}${lk('#/r-criteres', 'Critères d\'observation par rayon')}${lk('#/r-meubles', 'Meubles froids et seuils', `<span class="muted">${cfg().meubles.length}</span>`)}${lk('#/r-produits', 'Produits et favoris', `<span class="muted">${cfg().produits.length}</span>`)}${lk('#/r-causes', 'Causes de rupture', `<span class="muted">${cfg().causes.length}</span>`)}</div>
+V['reglages'] = () => hdr('Réglages', '', 1) + `<h2>Référentiel</h2><div class="list">${lk('#/r-rayons', 'Rayons et ordre de tournée', `<span class="muted">${rayons().length}</span>`)}${lk('#/r-criteres', 'Critères d\'observation par rayon')}${lk('#/r-meubles', 'Meubles froids et seuils', `<span class="muted">${cfg().meubles.length}</span>`)}${lk('#/r-produits', 'Produits et favoris', `<span class="muted">${cfg().produits.length}</span>`)}${lk('#/r-causes', 'Causes de rupture', `<span class="muted">${cfg().causes.length}</span>`)}${lk('#/personnes', 'Équipes (prénoms) et plannings types', `<span class="muted">${db.all('people').filter(p => p.type !== 'interim').length}</span>`)}</div>
   <h2>Fonctionnement</h2><div class="list">${lk('#/r-routine', 'Routine par jour de la semaine')}<div class="row"><span class="grow">Alerte ruptures répétées<div class="small muted">même produit, sur 7 jours</div></span><input type="number" min="2" max="10" value="${cfg().seuilRuptures}" style="width:70px" onchange="A.setSeuil(this.value)" aria-label="Seuil"></div></div>
   <h2>Sécurité et données</h2><div class="list">${lk('#/r-securite', 'Code d\'accès et verrouillage')}${lk('#/r-donnees', 'Sauvegarde, restauration, effacement')}</div>`;
 A.setSeuil = v => setCfg({ seuilRuptures: Math.max(2, +v || 3) });
@@ -396,7 +399,7 @@ A.kDel = i => { if (confirm('Retirer cette cause ?')) { const l = [...cfg().caus
 
 // Routine
 const JN = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
-const GOL = { tournee: 'Tournée guidée', ruptures: 'Relevé ruptures', bilan: 'Bilan du soir', journal: 'Journal', libre: 'Tâche simple' };
+const GOL = { tournee: 'Tournée guidée', ruptures: 'Relevé ruptures', bilan: 'Bilan du soir', journal: 'Journal', presents: 'Présents et consignes', fetes: 'Pré-commandes fêtes', libre: 'Tâche simple' };
 V['r-routine'] = () => { const w = S.rw ?? new Date().getDay(), l = [...(cfg().routine[w] || [])].sort((a, b) => a.h.localeCompare(b.h)); return hdr('Routine', 'une routine par jour de la semaine', 1) + `<div class="chips" style="margin-bottom:12px">${[1, 2, 3, 4, 5, 6, 0].map(i => `<button class="chip ${i === w ? 'on' : ''}" onclick="S.rw=${i};render()">${JN[i].slice(0, 3)}.</button>`).join('')}</div><h2>${JN[w]}</h2><div class="list">${l.map(t => `<div class="row"><span style="width:56px" class="acc">${fmtH(t.h)}</span><span class="grow">${esc(t.t)}<div class="small muted">${GOL[t.go] || ''}</div></span><button class="chip" onclick="A.rtEdit('${t.id}')">Modifier</button></div>`).join('') || '<div class="empty">Pas de routine ce jour (repos).</div>'}</div><button class="btn sec mt" onclick="A.rtEdit()">Ajouter une tâche</button><button class="btn sec mt" onclick="A.rtCopy()">Copier ce jour sur les autres jours travaillés</button><div class="small muted mt">Pense à créer les mêmes heures dans l'app Rappels de l'iPhone.</div>`; };
 A.rtEdit = id => { const w = S.rw ?? new Date().getDay(), t = id ? cfg().routine[w].find(x => x.id === id) : { t: '', h: '08:00', go: 'libre' }; sheet(`<h2 style="margin-top:0">${id ? 'Modifier la tâche' : 'Nouvelle tâche'} · ${JN[w]}</h2><div class="field"><span>Intitulé</span><input type="text" id="ut" value="${esc(t.t)}"></div><div class="field"><span>Heure</span><input type="time" id="uh" value="${t.h}" style="width:100%;font:16px Barlow;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)"></div><div class="field"><span>Ouvre</span><select id="ug">${Object.entries(GOL).map(([k, l]) => `<option value="${k}" ${k === t.go ? 'selected' : ''}>${l}</option>`).join('')}</select></div><div class="btns"><button class="btn sec" onclick="A.close()">Annuler</button><button class="btn" onclick="A.rtSave('${id || ''}')">Enregistrer</button></div>${id ? `<button class="del mt" onclick="A.rtDel('${id}')">Supprimer</button>` : ''}`, '#ut'); };
 A.rtSave = id => { const w = S.rw ?? new Date().getDay(), n = $('#ut').value.trim(); if (!n) return; const c = cfg(), l = [...(c.routine[w] || [])], o = { t: n, h: $('#uh').value, go: $('#ug').value }; const nl = id ? l.map(x => x.id === id ? { ...x, ...o } : x) : [...l, { id: 't' + db.newId(), ...o }]; setCfg({ routine: { ...c.routine, [w]: nl } }); A.close(); };
@@ -467,10 +470,227 @@ function askPin() { const h = ls('frais_pin'); if (!h) return; const bio = !!ls(
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else if (ls('frais_pin') && Date.now() - hiddenAt >= (+(ls('frais_lock') || 5)) * 6e4) askPin(); });
 
+// =====================================================================
+// V2 — Équipes (planning, présents, absences, intérimaires, consignes) et Fêtes
+// Règles RGPD : prénoms uniquement, jamais de motif d'absence, aucun jugement.
+// =====================================================================
+const hMin = h => { if (!h) return 0; const [a, b] = h.split(':').map(Number); return a * 60 + (b || 0); };
+const dur = (d, f) => Math.max(0, hMin(f) - hMin(d)) / 60;
+const hh = h => (h || '').replace(':00', ' h').replace(':', ' h ');
+const monday = s => { const d = new Date(s + 'T12:00'); const w = (d.getDay() + 6) % 7; d.setDate(d.getDate() - w); return iso(d); };
+const people = () => db.all('people');
+const P = id => db.get('people', id);
+const activeOn = (p, d) => p.type !== 'interim' || ((!p.debut || p.debut <= d) && (!p.fin || p.fin >= d));
+// Horaire d'une personne un jour donné : exception du jour, sinon planning type. null = repos.
+function slot(p, d) {
+  const dd = day(d), ex = (dd.horaires || {})[p.id];
+  if (ex !== undefined) return ex;
+  const t = (p.planning || {})[new Date(d + 'T12:00').getDay()];
+  return t && t.d && t.f ? t : null;
+}
+const isAbs = (pid, d) => !!(day(d).absences || {})[pid];
+function presents(r, d) {
+  return people().filter(p => p.rayon === r && activeOn(p, d)).map(p => ({ p, s: slot(p, d), abs: isAbs(p.id, d), rep: (day(d).remplace || {})[p.id] })).filter(x => x.s || x.abs).sort((a, b) => ((a.s && a.s.d) || '99').localeCompare((b.s && b.s.d) || '99'));
+}
+
+// ---------- Équipes : accueil du module ----------
+V['equipes'] = () => {
+  const d = today(), inter = people().filter(p => p.type === 'interim' && activeOn(p, d));
+  const abs = people().filter(p => isAbs(p.id, d)).length;
+  return hdr('Équipes', cap(fDate(d))) + `<div class="grid2">${rayons().map(r => { const l = presents(r.id, d); const n = l.filter(x => !x.abs).length, a = l.filter(x => x.abs).length; return `<a class="kpi" href="#/presents/${r.id}" style="color:inherit;text-decoration:none"><div class="l">${tag(r.id)}${esc(r.court)}</div><div class="v">${n}</div><div class="s">présent${n > 1 ? 's' : ''}${a ? ` · <span class="bad">${a} absent${a > 1 ? 's' : ''}</span>` : ''}</div></a>`; }).join('')}</div>
+  <div class="list mt">${lk('#/presents', 'Présents du jour et consignes', abs ? `<span class="pill p-bad">${abs} absent${abs > 1 ? 's' : ''}</span>` : '')}${lk('#/planning', 'Planning de la semaine')}${lk('#/interim', 'Intérimaires', inter.length ? `<span class="pill p-acc">${inter.length}</span>` : '')}${lk('#/personnes', 'Liste des équipes (prénoms)', `<span class="muted">${people().filter(p => p.type !== 'interim').length}</span>`)}</div>
+  <div class="small muted mt">Couverture des pics, prévisions et polyvalence arrivent avec les versions suivantes.</div>`;
+};
+
+// ---------- Présents du jour ----------
+V['presents'] = (r0) => {
+  const r = r0 || S.prR2 || lastRayon, d = S.prD || today(), l = presents(r, d);
+  const cons = ((day(d).consignes || {})[r] || []);
+  const fin = people().filter(p => p.type === 'interim' && p.rayon === r && p.fin && p.fin >= d && p.fin <= addDays(d, 3));
+  const nP = l.filter(x => !x.abs).length, hrs = l.filter(x => !x.abs).reduce((t, x) => t + dur(x.s.d, x.s.f), 0);
+  return hdr('Présents', cap(fDate(d)), 1) + chipsRay(r, 'prRay') +
+    `<div class="seg" style="margin-bottom:12px"><button onclick="A.prDay(-1)">‹ Veille</button><button class="${d === today() ? 'on-acc' : ''}" onclick="S.prD=null;render()">Aujourd'hui</button><button onclick="A.prDay(1)">Lendemain ›</button></div>` +
+    `<div class="grid2" style="margin-bottom:10px"><div class="kpi"><div class="l">Présents</div><div class="v">${nP}</div></div><div class="kpi"><div class="l">Heures prévues</div><div class="v">${String(Math.round(hrs * 10) / 10).replace('.', ',')} h</div></div></div>` +
+    (l.length ? `<div class="list">${l.map(({ p, s, abs, rep }) => `<div class="row"><span class="grow ${abs ? 'done-t' : ''}">${esc(p.prenom)}${p.type === 'interim' ? ' <span class="pill p-acc">Intérim</span>' : ''}${rep && P(rep) ? `<div class="small muted">remplace ${esc(P(rep).prenom)}</div>` : ''}</span>${abs ? '<span class="pill p-bad">Absent</span>' : `<span class="small muted">${hh(s.d)} – ${hh(s.f)}</span>`}<button class="chip" onclick="A.prEdit('${p.id}','${d}')">Modifier</button></div>`).join('')}</div>` : empty('Personne de prévu dans ce rayon ce jour. Ajoute les équipes dans la liste des prénoms.')) +
+    fin.map(p => `<div class="alert a-acc mt">Fin de mission de ${esc(p.prenom)} le ${fDate(p.fin, { day: 'numeric', month: 'short' })}</div>`).join('') +
+    `<div class="btns"><button class="btn sec" onclick="A.absSheet('${r}','${d}')">Déclarer une absence</button><button class="btn sec" onclick="A.renfort('${r}','${d}')">Ajouter un renfort</button></div>` +
+    `<h2>Consignes du jour · ${esc(R(r).court)}</h2>${cons.length ? `<div class="list">${cons.map((c, i) => `<label class="row"><input type="checkbox" ${c.ok ? 'checked' : ''} onchange="A.consT('${r}','${d}',${i})" style="width:22px;height:22px"><span class="grow ${c.ok ? 'done-t' : ''}">${esc(c.t)}</span><button class="del" onclick="event.preventDefault();A.consD('${r}','${d}',${i})" aria-label="Supprimer">×</button></label>`).join('')}</div>` : '<div class="small muted">Aucune consigne pour ce rayon.</div>'}
+    <div style="display:flex;gap:8px;margin-top:8px"><input type="text" id="cn2" placeholder="Nouvelle consigne" onkeydown="if(event.key==='Enter')A.consAdd('${r}','${d}')"><button class="chip" onclick="A.consAdd('${r}','${d}')">Ajouter</button></div>
+    ${cons.length ? `<button class="btn mt" onclick="A.consShare('${r}','${d}')">Partager les consignes</button>` : ''}`;
+};
+A.prRay = id => { S.prR2 = id; setRay(id); location.hash = '#/presents/' + id; };
+A.prDay = n => { S.prD = addDays(S.prD || today(), n); render(); };
+const setDay = (d, patch) => db.put('days', { ...day(d), ...patch });
+A.prEdit = (pid, d) => {
+  const p = P(pid), s = slot(p, d) || { d: '', f: '' }, ti = 'style="width:100%;font:16px Barlow;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)"';
+  sheet(`<h2 style="margin-top:0">${esc(p.prenom)} · ${fDate(d, { weekday: 'long', day: 'numeric', month: 'short' })}</h2><div class="grid2"><div class="field"><span>Début</span><input type="time" id="hd" value="${s.d || ''}" ${ti}></div><div class="field"><span>Fin</span><input type="time" id="hf" value="${s.f || ''}" ${ti}></div></div>
+  <button class="btn" onclick="A.slotSave('${pid}','${d}')">Enregistrer cet horaire</button>
+  <div class="btns"><button class="btn sec" onclick="A.slotRepos('${pid}','${d}')">Repos ce jour</button><button class="btn sec" onclick="A.absSet('${pid}','${d}')">${isAbs(pid, d) ? 'Annuler l\'absence' : 'Absent'}</button></div>
+  <button class="btn sec mt" onclick="A.slotReset('${pid}','${d}')">Revenir au planning type</button><div class="small muted mt">Aucun motif n'est enregistré pour une absence.</div>`);
+};
+A.slotSave = (pid, d) => { const a = $('#hd').value, b = $('#hf').value; if (!a || !b || hMin(b) <= hMin(a)) { toast('Horaire incomplet'); return; } const dd = day(d); setDay(d, { horaires: { ...(dd.horaires || {}), [pid]: { d: a, f: b } } }); A.close(); toast('Horaire enregistré'); };
+A.slotRepos = (pid, d) => { const dd = day(d); setDay(d, { horaires: { ...(dd.horaires || {}), [pid]: null } }); A.close(); };
+A.slotReset = (pid, d) => { const dd = day(d), h = { ...(dd.horaires || {}) }, a = { ...(dd.absences || {}) }; delete h[pid]; delete a[pid]; setDay(d, { horaires: h, absences: a }); A.close(); };
+A.absSet = (pid, d) => { const dd = day(d), a = { ...(dd.absences || {}) }; if (a[pid]) { delete a[pid]; setDay(d, { absences: a }); A.close(); return; } a[pid] = true; setDay(d, { absences: a }); A.close(); toast('Absence notée, sans motif'); setTimeout(() => A.replSheet(pid, d), 250); };
+A.absSheet = (r, d) => { const l = presents(r, d).filter(x => !x.abs); if (!l.length) { toast('Personne à déclarer absent'); return; } sheet(`<h2 style="margin-top:0">Qui est absent ?</h2><div class="list">${l.map(({ p, s }) => `<button class="row" onclick="A.absSet('${p.id}','${d}')"><span class="grow">${esc(p.prenom)}</span><span class="small muted">${hh(s.d)} – ${hh(s.f)}</span></button>`).join('')}</div><div class="small muted mt">Aucun motif n'est demandé ni enregistré.</div><button class="btn sec mt" onclick="A.close()">Annuler</button>`); };
+A.replSheet = (pid, d) => {
+  const ab = P(pid), s = slot(ab, d); if (!s) return;
+  const cand = people().filter(p => p.id !== pid && activeOn(p, d) && !isAbs(p.id, d) && !slot(p, d));
+  sheet(`<h2 style="margin-top:0">Remplacer ${esc(ab.prenom)} ?</h2><div class="small muted" style="margin-bottom:8px">${hh(s.d)} – ${hh(s.f)} · personnes non prévues ce jour</div>${cand.length ? `<div class="list">${cand.map(p => `<button class="row" onclick="A.replSet('${p.id}','${pid}','${d}')"><span class="grow">${esc(p.prenom)} <span class="small muted">· ${esc(R(p.rayon).court)}</span>${p.type === 'interim' ? ' <span class="pill p-acc">Intérim</span>' : ''}</span></button>`).join('')}</div>` : '<div class="card muted">Personne de disponible dans la liste.</div>'}<button class="btn sec mt" onclick="A.close()">Pas de remplacement</button>`);
+};
+A.replSet = (rid, pid, d) => { const dd = day(d), s = slot(P(pid), d); setDay(d, { horaires: { ...(dd.horaires || {}), [rid]: { d: s.d, f: s.f } }, remplace: { ...(dd.remplace || {}), [rid]: pid } }); A.close(); toast('Remplacement noté'); };
+A.renfort = (r, d) => { const cand = people().filter(p => activeOn(p, d) && !slot(p, d) && !isAbs(p.id, d)); const ti = 'style="width:100%;font:16px Barlow;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)"'; sheet(`<h2 style="margin-top:0">Renfort · ${esc(R(r).court)}</h2>${cand.length ? `<div class="field"><span>Qui</span><select id="rp">${cand.map(p => `<option value="${p.id}">${esc(p.prenom)} · ${esc(R(p.rayon).court)}${p.type === 'interim' ? ' (intérim)' : ''}</option>`).join('')}</select></div><div class="grid2"><div class="field"><span>Début</span><input type="time" id="hd" value="14:00" ${ti}></div><div class="field"><span>Fin</span><input type="time" id="hf" value="19:00" ${ti}></div></div><button class="btn" onclick="A.slotSave($('#rp').value,'${d}')">Ajouter</button>` : '<div class="card muted">Personne de disponible. Ajoute un intérimaire dans Intérimaires.</div>'}<button class="btn sec mt" onclick="A.close()">Annuler</button>`); };
+A.consAdd = (r, d) => { const t = $('#cn2').value.trim(); if (!t) return; const dd = day(d), c = { ...(dd.consignes || {}) }; c[r] = [...(c[r] || []), { t, ok: false }]; setDay(d, { consignes: c }); };
+A.consT = (r, d, i) => { const dd = day(d), c = { ...(dd.consignes || {}) }; c[r] = c[r].map((x, j) => j === i ? { ...x, ok: !x.ok } : x); setDay(d, { consignes: c }); };
+A.consD = (r, d, i) => { const dd = day(d), c = { ...(dd.consignes || {}) }; c[r] = c[r].filter((_, j) => j !== i); setDay(d, { consignes: c }); };
+A.consShare = async (r, d) => { const c = ((day(d).consignes || {})[r] || []).filter(x => !x.ok); const txt = `Consignes ${R(r).court} · ${fDate(d, { weekday: 'long', day: 'numeric', month: 'long' })}\n` + c.map(x => '• ' + x.t).join('\n'); try { if (navigator.share) { await navigator.share({ text: txt }); return; } } catch (e) { if (e.name === 'AbortError') return; } location.href = 'sms:&body=' + encodeURIComponent(txt); };
+
+// ---------- Planning de la semaine ----------
+V['planning'] = () => {
+  const r = S.plR || lastRayon, w0 = S.plW || monday(today()), days = [...Array(7)].map((_, i) => addDays(w0, i));
+  const l = people().filter(p => p.rayon === r && days.some(d => activeOn(p, d)));
+  const tot = days.reduce((t, d) => t + presents(r, d).filter(x => !x.abs).reduce((u, x) => u + dur(x.s.d, x.s.f), 0), 0);
+  const cell = (p, d) => { if (!activeOn(p, d)) return '<span class="pc off"></span>'; if (isAbs(p.id, d)) return `<button class="pc abs" onclick="A.prEdit('${p.id}','${d}')">abs</button>`; const s = slot(p, d); const ex = (day(d).horaires || {})[p.id] !== undefined; return `<button class="pc ${s ? (hMin(s.d) < 720 ? 'am' : 'pm') : ''} ${ex ? 'ex' : ''}" onclick="A.prEdit('${p.id}','${d}')">${s ? `${s.d.slice(0, 2).replace(/^0/, '')}–${s.f.slice(0, 2).replace(/^0/, '')}` : '·'}</button>`; };
+  return hdr('Planning · ' + esc(R(r).court), `semaine du ${fDate(w0, { day: 'numeric', month: 'long' })} · ${String(Math.round(tot * 10) / 10).replace('.', ',')} h prévues`, 1) + chipsRay(r, 'plRay') +
+    `<div class="seg" style="margin-bottom:10px"><button onclick="S.plW=addDays(S.plW||monday(today()),-7);render()">‹ Préc.</button><button class="${w0 === monday(today()) ? 'on-acc' : ''}" onclick="S.plW=null;render()">Cette semaine</button><button onclick="S.plW=addDays(S.plW||monday(today()),7);render()">Suiv. ›</button></div>` +
+    (l.length ? `<div style="overflow-x:auto"><div class="pg"><span></span>${days.map(d => `<span class="h ${d === today() ? 'acc' : ''}">${fDate(d, { weekday: 'short' }).slice(0, 3)}<br>${+d.slice(8)}</span>`).join('')}${l.map(p => `<span class="pn">${esc(p.prenom)}${p.type === 'interim' ? '<span class="acc"> ·i</span>' : ''}</span>${days.map(d => cell(p, d)).join('')}`).join('')}</div></div><div class="small muted mt">Horaires en heures (6–13 = 6 h à 13 h) · bleu matin, vert après-midi · cadre pointillé = modifié ce jour · ·i = intérim. Touche une case pour la modifier.</div>` : empty('Aucune personne dans ce rayon. Ajoute les prénoms dans la liste des équipes.')) +
+    `<div class="mt">${lk('#/personnes', 'Modifier les plannings types')}</div>`;
+};
+A.plRay = id => { S.plR = id; setRay(id); render(); };
+window.addDays = addDays; window.monday = monday; window.today = today;
+
+// ---------- Liste des équipes (prénoms) ----------
+const JC = [1, 2, 3, 4, 5, 6, 0];
+V['personnes'] = () => {
+  const r = S.peR || '', l = people().filter(p => p.type !== 'interim' && (!r || p.rayon === r)).sort((a, b) => a.prenom.localeCompare(b.prenom));
+  return hdr('Équipes', 'prénoms uniquement · aucun commentaire sur les personnes', 1) + chipsRay(r, 'peR', 1) +
+    (l.length ? `<div class="list">${l.map(p => { const h = JC.reduce((t, w) => { const s = (p.planning || {})[w]; return t + (s && s.d ? dur(s.d, s.f) : 0); }, 0); return `<a class="row" href="#/personne/${p.id}"><span class="grow">${tag(p.rayon)}${esc(p.prenom)}<div class="small muted">${esc(R(p.rayon).court)} · planning type ${String(h).replace('.', ',')} h / semaine</div></span><span class="chev">›</span></a>`; }).join('')}</div>` : empty('Aucune personne. Ajoute les prénoms de tes équipes.')) +
+    `<a class="btn sec mt" href="#/personne/new">Ajouter une personne</a><div class="mt">${lk('#/interim', 'Intérimaires')}</div>`;
+};
+A.peR = id => { S.peR = id; render(); };
+V['personne'] = id => {
+  const isNew = id === 'new' || id === 'newi', p = isNew ? { prenom: '', rayon: lastRayon, type: id === 'newi' ? 'interim' : 'salarie', planning: {} } : P(id);
+  if (!p) return hdr('Personne', '', 1) + empty('Personne introuvable.');
+  S.pe = S.pe && S.pe.id === (p.id || id) ? S.pe : { id: p.id || id, planning: JSON.parse(JSON.stringify(p.planning || {})) };
+  const ti = 'style="font:16px Barlow;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);width:100%"';
+  const it = p.type === 'interim';
+  return hdr(isNew ? (it ? 'Nouvel intérimaire' : 'Nouvelle personne') : esc(p.prenom), it ? 'mission d\'intérim' : 'équipe', 1) +
+    `<div class="field"><span>Prénom</span><input type="text" id="pp" value="${esc(p.prenom)}" autocomplete="off"></div><div class="field"><span>Rayon</span><select id="pr">${rayons().map(r => `<option value="${r.id}" ${r.id === p.rayon ? 'selected' : ''}>${esc(r.nom)}</option>`).join('')}</select></div>` +
+    (it ? `<div class="field"><span>Agence</span><input type="text" id="pag" value="${esc(p.agence || '')}"></div><div class="grid2"><div class="field"><span>Début de mission</span><input type="date" id="pdb" value="${p.debut || today()}" ${ti}></div><div class="field"><span>Fin de mission</span><input type="date" id="pfn" value="${p.fin || addDays(today(), 14)}" ${ti}></div></div>` : '') +
+    `<h2>Planning type</h2><div class="small muted" style="margin-bottom:6px">Horaires habituels. Laisse vide les jours de repos.</div><div class="list">${JC.map(w => { const s = S.pe.planning[w] || {}; return `<div class="row" style="gap:6px"><span style="width:42px">${JN[w].slice(0, 3)}.</span><input type="time" value="${s.d || ''}" ${ti} onchange="A.peT(${w},'d',this.value)" aria-label="Début ${JN[w]}"><input type="time" value="${s.f || ''}" ${ti} onchange="A.peT(${w},'f',this.value)" aria-label="Fin ${JN[w]}"></div>`; }).join('')}</div>` +
+    (it && !isNew ? `<h2>Accueil (premier jour)</h2><div class="list">${ACC.map((a, i) => `<label class="row"><input type="checkbox" ${(p.accueil || {})[i] ? 'checked' : ''} onchange="A.accT('${p.id}',${i})" style="width:22px;height:22px"><span class="grow">${a}</span></label>`).join('')}</div>` : '') +
+    `<button class="btn mt" onclick="A.peSave('${isNew ? '' : p.id}','${p.type}')">Enregistrer</button>` +
+    (isNew ? '' : `<button class="btn sec mt" onclick="A.peErase('${p.id}')" style="color:var(--bad)">Effacer cette personne (RGPD)</button><div class="small muted mt">L'effacement supprime la fiche et toutes les mentions de cette personne, définitivement.</div>`);
+};
+const ACC = ['Poste et personne référente', 'Hygiène et tenue', 'Sécurité, chambre froide, couteaux', 'Horaires, pauses, badge', 'Visite du rayon et de la réserve'];
+A.peT = (w, k, v) => { S.pe.planning[w] = { ...(S.pe.planning[w] || {}), [k]: v }; };
+A.accT = (id, i) => { const p = P(id); db.put('people', { ...p, accueil: { ...(p.accueil || {}), [i]: !(p.accueil || {})[i] } }); };
+A.peSave = (id, type) => {
+  const n = $('#pp').value.trim(); if (!n) { $('#pp').style.borderColor = 'var(--bad)'; return; }
+  const pl = {}; Object.entries(S.pe.planning).forEach(([w, s]) => { if (s && s.d && s.f && hMin(s.f) > hMin(s.d)) pl[w] = { d: s.d, f: s.f }; });
+  const o = { prenom: n, rayon: $('#pr').value, type, planning: pl };
+  if (type === 'interim') Object.assign(o, { agence: $('#pag').value.trim(), debut: $('#pdb').value, fin: $('#pfn').value });
+  db.put('people', id ? { id, ...o } : o); S.pe = null; toast('Enregistré'); history.back();
+};
+A.peErase = id => { const p = P(id); if (!confirm(`Effacer définitivement ${p.prenom} et toutes ses mentions ?`)) return; eraseP(id); S.pe = null; toast('Personne effacée'); history.back(); };
+function eraseP(id) {
+  db.all('days').forEach(d => { let ch = false; const o = { ...d }; ['horaires', 'absences', 'remplace'].forEach(k => { if (o[k] && (id in o[k] || Object.values(o[k]).includes(id))) { o[k] = Object.fromEntries(Object.entries(o[k]).filter(([a, b]) => a !== id && b !== id)); ch = true; } }); if (o.retrait) ch = true; if (ch) db.put('days', o); });
+  db.all('retraits').forEach(r => { if ((r.creneaux || []).some(c => (c.pers || []).includes(id))) db.put('retraits', { ...r, creneaux: r.creneaux.map(c => ({ ...c, pers: (c.pers || []).filter(x => x !== id) })) }); });
+  db.erase('people', id);
+}
+// Intérimaires : fiche effacée automatiquement 3 mois après la fin de mission (RGPD)
+function purgeInterim() { const lim = addDays(today(), -90); people().filter(p => p.type === 'interim' && p.fin && p.fin < lim).forEach(p => eraseP(p.id)); }
+
+// ---------- Intérimaires ----------
+V['interim'] = () => {
+  const d = today(), l = people().filter(p => p.type === 'interim');
+  const cur = l.filter(p => activeOn(p, d)), fut = l.filter(p => p.debut > d), past = l.filter(p => p.fin && p.fin < d);
+  const w0 = monday(d), wd = [...Array(7)].map((_, i) => addDays(w0, i));
+  const hrs = rayons().map(r => [r, wd.reduce((t, x) => t + l.filter(p => p.rayon === r.id && activeOn(p, x) && !isAbs(p.id, x)).reduce((u, p) => { const s = slot(p, x); return u + (s ? dur(s.d, s.f) : 0); }, 0), 0)]).filter(([, h]) => h > 0);
+  const row = p => { const acc = Object.values(p.accueil || {}).filter(Boolean).length; return `<a class="row" href="#/personne/${p.id}"><span class="grow">${tag(p.rayon)}${esc(p.prenom)} <span class="small muted">· ${esc(R(p.rayon).court)}</span><div class="small muted">${esc(p.agence || 'agence ?')} · ${fDate(p.debut, { day: 'numeric', month: 'short' })} → ${fDate(p.fin, { day: 'numeric', month: 'short' })}${activeOn(p, d) && acc < ACC.length ? ` · accueil ${acc}/${ACC.length}` : ''}</div></span><span class="chev">›</span></a>`; };
+  return hdr('Intérimaires', `${cur.length} en mission`, 1) +
+    `<h2>En mission</h2>${cur.length ? `<div class="list">${cur.map(row).join('')}</div>` : '<div class="small muted">Aucun intérimaire en mission.</div>'}` +
+    (fut.length ? `<h2>À venir</h2><div class="list">${fut.map(row).join('')}</div>` : '') +
+    `<h2>Heures d'intérim · cette semaine</h2>${hrs.length ? `<div class="grid2">${hrs.map(([r, h]) => `<div class="kpi"><div class="l">${tag(r.id)}${esc(r.court)}</div><div class="v">${String(Math.round(h * 10) / 10).replace('.', ',')} h</div></div>`).join('')}</div>` : '<div class="small muted">Aucune heure d\'intérim prévue.</div>'}` +
+    `<a class="btn mt" href="#/personne/newi">Ajouter un intérimaire</a>` +
+    (past.length ? `<h2>Missions terminées</h2><div class="list">${past.map(row).join('')}</div><div class="small muted mt">Chaque fiche est effacée automatiquement 3 mois après la fin de mission.</div>` : '');
+};
+
+// ---------- Fêtes : pré-commandes ----------
+const inFetes = d => { const m = +d.slice(5, 7), j = +d.slice(8); return (m === 11 && j >= 16) || m === 12; };
+const fetesL = () => db.all('fetes').sort((a, b) => a.rayon.localeCompare(b.rayon) || a.nom.localeCompare(b.nom));
+const lastCum = f => { const e = Object.entries(f.cumuls || {}).sort((a, b) => a[0].localeCompare(b[0])); return e.length ? e[e.length - 1][1] : 0; };
+function proj(f, target) {
+  const e = Object.entries(f.cumuls || {}).sort((a, b) => a[0].localeCompare(b[0]));
+  if (e.length < 7) return null;
+  const last = e.slice(-10), x0 = new Date(last[0][0] + 'T12:00').getTime(), xs = last.map(([d]) => (new Date(d + 'T12:00').getTime() - x0) / 864e5), ys = last.map(([, v]) => v);
+  const n = xs.length, mx = xs.reduce((a, b) => a + b) / n, my = ys.reduce((a, b) => a + b) / n, sxx = xs.reduce((a, x) => a + (x - mx) ** 2, 0);
+  if (!sxx) return null;
+  const k = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / sxx;
+  const tx = (new Date(target + 'T12:00').getTime() - x0) / 864e5;
+  return Math.max(ys[n - 1], Math.round(my + k * (tx - mx)));
+}
+function fetStatus(f) { const c = lastCum(f); if (f.capacite && c > f.capacite) return ['bad', 'Capacité dépassée']; if (f.commande && c >= f.commande * 0.8) return ['warn', c >= f.commande ? 'Commande dépassée' : 'Recommander']; return ['ok', 'OK']; }
+V['fetes'] = () => {
+  const d = today(), y = +d.slice(0, 4) + (+d.slice(5, 7) < 7 ? -1 : 0), t24 = `${y}-12-24`, t31 = `${y}-12-31`;
+  const j = Math.round((new Date(t24 + 'T12:00') - new Date(d + 'T12:00')) / 864e5), l = fetesL();
+  return hdr('Fêtes · pré-commandes', `${cap(fDate(d))}${j >= 0 ? ` · J-${j} avant le 24` : ''}`, 1) +
+    (l.length ? l.map(f => { const c = lastCum(f), [st, lb] = fetStatus(f), ref = f.capacite || f.commande || Math.max(c, 1), p24 = proj(f, t24), p31 = proj(f, t31); return `<div class="card" style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;gap:8px"><b style="font-weight:600">${tag(f.rayon)}${esc(f.nom)}</b><span class="small">${c} réservé${c > 1 ? 's' : ''}${f.commande ? ` / ${f.commande} commandés` : ''}${f.capacite ? ` · capacité ${f.capacite}` : ''}</span></div><div class="bar" style="margin:7px 0"><i style="width:${Math.min(100, Math.round(c / ref * 100))}%;background:var(--${st})"></i></div><div style="display:flex;justify-content:space-between;gap:8px" class="small"><span class="${st}">${lb}</span><span class="muted">${p24 != null ? `Estimation : ~${p24} au 24 · ~${p31} au 31` : 'Estimation : pas encore assez de jours'}</span></div><div style="margin-top:6px"><button class="chip" onclick="A.fetEdit('${f.id}')">Modifier</button></div></div>`; }).join('') : empty('Aucun produit festif. Ajoute les produits suivis (chapons, plateaux, foie gras…).')) +
+    (l.length ? `<button class="btn mt" onclick="A.fetMaj()">Mettre à jour les cumuls du jour</button>` : '') +
+    `<button class="btn sec mt" onclick="A.fetEdit()">Ajouter un produit festif</button>` +
+    `<div class="list mt">${lk('#/retrait', 'Retrait des commandes du 24 et du 31')}${lk('#/carnet', 'Carnet des fêtes', `<span class="muted">${db.all('carnet').filter(c => c.date.slice(0, 4) == y || c.date.slice(0, 4) == y + 1).length}</span>`)}</div>` +
+    `<div class="small muted mt">Seuls les cumuls par produit sont saisis, recopiés du registre du magasin. Aucune donnée client.</div>`;
+};
+A.fetEdit = id => { const f = id ? db.get('fetes', id) : { nom: '', rayon: lastRayon, commande: '', capacite: '' }; sheet(`<h2 style="margin-top:0">${id ? 'Modifier' : 'Nouveau produit festif'}</h2><div class="field"><span>Produit</span><input type="text" id="fn" value="${esc(f.nom)}"></div><div class="field"><span>Rayon</span><select id="fr">${rayons().map(r => `<option value="${r.id}" ${r.id === f.rayon ? 'selected' : ''}>${esc(r.nom)}</option>`).join('')}</select></div><div class="grid2"><div class="field"><span>Quantité commandée au fournisseur</span><input type="number" inputmode="numeric" id="fc" value="${f.commande || ''}"></div><div class="field"><span>Capacité de préparation (facultatif)</span><input type="number" inputmode="numeric" id="fk" value="${f.capacite || ''}"></div></div><div class="btns"><button class="btn sec" onclick="A.close()">Annuler</button><button class="btn" onclick="A.fetSave('${id || ''}')">Enregistrer</button></div>${id ? `<button class="del mt" onclick="A.fetDel('${id}')">Supprimer ce produit</button>` : ''}`, '#fn'); };
+A.fetSave = id => { const n = $('#fn').value.trim(); if (!n) return; db.put('fetes', { ...(id ? { id } : {}), nom: n, rayon: $('#fr').value, commande: +$('#fc').value || null, capacite: +$('#fk').value || null }); A.close(); };
+A.fetDel = id => { if (confirm('Supprimer ce produit et ses cumuls ?')) { db.del('fetes', id); A.close(); } };
+A.fetMaj = () => { const d = today(); sheet(`<h2 style="margin-top:0">Cumuls au ${fDate(d, { day: 'numeric', month: 'long' })}</h2><div class="small muted" style="margin-bottom:8px">Total des réservations depuis le début, recopié du registre du magasin.</div><div class="list">${fetesL().map(f => `<div class="row"><span class="grow">${tag(f.rayon)}${esc(f.nom)}<div class="small muted">dernier : ${lastCum(f)}</div></span><input type="number" inputmode="numeric" data-f="${f.id}" value="${(f.cumuls || {})[d] ?? ''}" placeholder="${lastCum(f)}" style="width:90px"></div>`).join('')}</div><div class="btns"><button class="btn sec" onclick="A.close()">Annuler</button><button class="btn" onclick="A.fetMajOk()">Enregistrer</button></div>`, '[data-f]'); };
+A.fetMajOk = () => { const d = today(); document.querySelectorAll('[data-f]').forEach(i => { if (i.value === '') return; const f = db.get('fetes', i.dataset.f); db.put('fetes', { ...f, cumuls: { ...(f.cumuls || {}), [d]: +i.value } }); }); markTask('fetes'); A.close(); toast('Cumuls enregistrés'); };
+
+// ---------- Retrait des commandes ----------
+V['retrait'] = () => {
+  const y = +today().slice(0, 4) + (+today().slice(5, 7) < 7 ? -1 : 0), d = S.reD || `${y}-12-24`;
+  const r = db.get('retraits', d) || { id: d, creneaux: [] }, tot = r.creneaux.reduce((t, c) => t + (+c.n || 0), 0);
+  return hdr('Retrait des commandes', cap(fDate(d)), 1) + `<div class="seg two" style="margin-bottom:12px"><button class="${d.endsWith('12-24') ? 'on-acc' : ''}" onclick="S.reD='${y}-12-24';render()">24 décembre</button><button class="${d.endsWith('12-31') ? 'on-acc' : ''}" onclick="S.reD='${y}-12-31';render()">31 décembre</button></div>` +
+    (r.creneaux.length ? `<div class="list">${r.creneaux.map((c, i) => { const np = (c.pers || []).length, per = np ? c.n / np : c.n, warn = c.n > 0 && (!np || per > 40); return `<div class="row"><span style="width:96px">${hh(c.d)} – ${hh(c.f)}</span><span class="grow">${(c.pers || []).map(x => P(x) ? esc(P(x).prenom) : '').filter(Boolean).join(', ') || '<span class="bad">personne</span>'}</span><span class="${warn ? 'warn' : ''}">${c.n || 0} cdes</span><button class="chip" onclick="A.creEdit('${d}',${i})">Modifier</button></div>`; }).join('')}</div><div class="small muted mt">${tot} commandes prévues · alerte au-delà de 40 retraits par personne et par créneau</div>` : empty('Aucun créneau. Ajoute les créneaux de retrait.')) +
+    r.creneaux.filter(c => c.n > 0 && (!(c.pers || []).length || c.n / c.pers.length > 40)).map(c => `<div class="alert a-warn mt">${hh(c.d)} – ${hh(c.f)} : ${c.n} retraits, prévoir ${Math.ceil(c.n / 40)} personne${Math.ceil(c.n / 40) > 1 ? 's' : ''}</div>`).join('') +
+    `<button class="btn sec mt" onclick="A.creEdit('${d}')">Ajouter un créneau</button>`;
+};
+A.creEdit = (d, i) => {
+  const r = db.get('retraits', d) || { id: d, creneaux: [] }, c = i != null ? r.creneaux[i] : { d: '10:00', f: '12:00', n: '', pers: [] };
+  const ti = 'style="width:100%;font:16px Barlow;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)"';
+  const cand = people().filter(p => activeOn(p, d));
+  sheet(`<h2 style="margin-top:0">Créneau de retrait</h2><div class="grid2"><div class="field"><span>Début</span><input type="time" id="cd" value="${c.d}" ${ti}></div><div class="field"><span>Fin</span><input type="time" id="cf" value="${c.f}" ${ti}></div></div><div class="field"><span>Commandes prévues sur le créneau</span><input type="number" inputmode="numeric" id="cnb" value="${c.n || ''}"></div><div class="small muted" style="margin:6px 0">Personnel affecté</div><div class="chips" id="cpers">${cand.map(p => `<button class="chip ${(c.pers || []).includes(p.id) ? 'on' : ''}" data-p="${p.id}" onclick="this.classList.toggle('on')">${esc(p.prenom)}</button>`).join('') || '<span class="small muted">Ajoute d\'abord les équipes.</span>'}</div><div class="btns"><button class="btn sec" onclick="A.close()">Annuler</button><button class="btn" onclick="A.creSave('${d}',${i ?? 'null'})">Enregistrer</button></div>${i != null ? `<button class="del mt" onclick="A.creDel('${d}',${i})">Supprimer le créneau</button>` : ''}`);
+};
+A.creSave = (d, i) => { const r = db.get('retraits', d) || { id: d, creneaux: [] }, l = [...r.creneaux], o = { d: $('#cd').value, f: $('#cf').value, n: +$('#cnb').value || 0, pers: [...document.querySelectorAll('#cpers .chip.on')].map(x => x.dataset.p) }; i == null ? l.push(o) : (l[i] = o); l.sort((a, b) => a.d.localeCompare(b.d)); db.put('retraits', { id: d, creneaux: l }); A.close(); };
+A.creDel = (d, i) => { const r = db.get('retraits', d); db.put('retraits', { id: d, creneaux: r.creneaux.filter((_, j) => j !== i) }); A.close(); };
+
+// ---------- Carnet des fêtes ----------
+V['carnet'] = () => {
+  const l = db.all('carnet').sort((a, b) => b.ts - a.ts);
+  return hdr('Carnet des fêtes', 'ce qui a manqué, débordé ou mal fonctionné', 1) + (l.length ? `<div class="list">${l.map(c => `<div class="row" style="display:block"><div class="small muted">${fDate(c.date, { day: 'numeric', month: 'short', year: 'numeric' })} · ${c.rayon ? esc(R(c.rayon).court) : 'Général'}</div><div>${esc(c.pb)}</div>${c.cause ? `<div class="small muted">Cause : ${esc(c.cause)}</div>` : ''}${c.idee ? `<div class="small acc">L'an prochain : ${esc(c.idee)}</div>` : ''}${c.ph ? `<img class="lazy" data-ph="${c.ph}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;margin-top:4px" alt="">` : ''}<div><button class="del" onclick="A.carDel('${c.id}')">Supprimer</button></div></div>`).join('')}</div>` : empty('Carnet vide. Note chaque soir ce qui n\'a pas fonctionné.')) + `<button class="btn mt" onclick="A.carAdd()">Ajouter une entrée</button>`;
+};
+A.carAdd = () => { S.cph = null; sheet(`<h2 style="margin-top:0">Carnet des fêtes</h2><div class="field"><span>Rayon</span><select id="ka"><option value="">Général</option>${rayons().map(r => `<option value="${r.id}" ${r.id === lastRayon ? 'selected' : ''}>${esc(r.nom)}</option>`).join('')}</select></div><div class="field"><span>Problème constaté</span><textarea id="kb"></textarea></div><div class="field"><span>Cause probable</span><input type="text" id="kc"></div><div class="field"><span>Idée pour l'an prochain</span><input type="text" id="kd"></div><button class="chip" id="kph" onclick="takePhoto(id=>{if(id){S.cph=id;document.getElementById('kph').textContent='Photo ✓'}})">Ajouter une photo</button><div class="btns"><button class="btn sec" onclick="A.close()">Annuler</button><button class="btn" onclick="A.carSave()">Enregistrer</button></div>`, '#kb'); };
+window.takePhoto = takePhoto;
+A.carSave = () => { const pb = $('#kb').value.trim(); if (!pb) { $('#kb').style.borderColor = 'var(--bad)'; return; } db.put('carnet', { date: today(), ts: Date.now(), rayon: $('#ka').value || null, pb, cause: $('#kc').value.trim(), idee: $('#kd').value.trim(), ph: S.cph || null }); A.close(); toast('Ajouté au carnet'); };
+A.carDel = id => { if (confirm('Supprimer cette entrée ?')) db.del('carnet', id); };
+
+// ---------- Alertes V2 (ajoutées à l'accueil) ----------
+function alertsV2() {
+  const out = [], d = today();
+  people().filter(p => p.type === 'interim' && p.fin && p.fin >= d && p.fin <= addDays(d, 3)).forEach(p => out.push(['acc', `Fin de mission de ${esc(p.prenom)} le ${fDate(p.fin, { weekday: 'short', day: 'numeric', month: 'short' })}`, '#/interim']));
+  people().filter(p => p.type === 'interim' && activeOn(p, d) && Object.values(p.accueil || {}).filter(Boolean).length < ACC.length && p.debut >= addDays(d, -2)).forEach(p => out.push(['acc', `Accueil de ${esc(p.prenom)} à compléter`, '#/personne/' + p.id]));
+  const ab = people().filter(p => isAbs(p.id, d) && !Object.values(day(d).remplace || {}).includes(p.id)); if (ab.length) out.push(['warn', `${ab.length} absence${ab.length > 1 ? 's' : ''} non remplacée${ab.length > 1 ? 's' : ''} aujourd'hui`, '#/presents']);
+  if (inFetes(d)) fetesL().forEach(f => { const [st, lb] = fetStatus(f); if (st !== 'ok') out.push([st, `${esc(f.nom)} : ${lb.toLowerCase()} (${lastCum(f)}${f.capacite && st === 'bad' ? ' / ' + f.capacite : f.commande ? ' / ' + f.commande : ''})`, '#/fetes']); });
+  const m = +d.slice(5, 7), j = +d.slice(8), old = db.all('carnet').filter(c => +c.date.slice(0, 4) < +d.slice(0, 4) - (m < 7 ? 1 : 0) && c.idee);
+  if (m === 11 && j <= 15 && old.length) out.push(['acc', `${old.length} idée${old.length > 1 ? 's' : ''} du carnet des fêtes précédentes à relire`, '#/carnet']);
+  return out;
+}
+
 // ---------- Navigation ----------
-const ic = { home: '<path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/>', plus: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/>', histo: '<path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="8"/>', plan: '<path d="M5 5h14M5 12h14M5 19h9"/><circle cx="19" cy="19" r="1.5"/>', more: '<path d="M4 7h16M4 12h16M4 17h16"/>' };
-const tabs = [['', 'Journée', 'home'], ['saisir', 'Saisir', 'plus'], ['histo', 'Historique', 'histo'], ['plan', 'Plan', 'plan'], ['plus', 'Plus', 'more']];
-const tabOf = { tournee: 'saisir', ruptures: 'saisir', bilan: 'saisir', suivis: 'histo', obs: 'histo', 'obs-detail': 'histo', evolution: 'histo', galerie: 'histo', 'ruptures-stats': 'histo', journal: 'histo', actions: 'histo', raccourcis: 'plus', reglages: 'plus' };
+const ic = { home: '<path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/>', plus: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/>', histo: '<path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="8"/>', plan: '<path d="M5 5h14M5 12h14M5 19h9"/><circle cx="19" cy="19" r="1.5"/>', more: '<path d="M4 7h16M4 12h16M4 17h16"/>', team: '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6M15 20c0-2.5 1-4.5 3-4.5s3 1.7 3 4.5"/>' };
+const tabs = [['', 'Journée', 'home'], ['saisir', 'Saisir', 'plus'], ['equipes', 'Équipes', 'team'], ['histo', 'Historique', 'histo'], ['plus', 'Plus', 'more']];
+const tabOf = { tournee: 'saisir', ruptures: 'saisir', bilan: 'saisir', suivis: 'histo', obs: 'histo', 'obs-detail': 'histo', evolution: 'histo', galerie: 'histo', 'ruptures-stats': 'histo', journal: 'histo', actions: 'histo', raccourcis: 'plus', reglages: 'plus', plan: 'plus', fetes: 'saisir', retrait: 'saisir', carnet: 'saisir', presents: 'equipes', planning: 'equipes', interim: 'equipes', personnes: 'equipes', personne: 'equipes' };
 let dirty = false;
 function render() {
   const [route, param] = (location.hash.replace(/^#\/?/, '') || '').split('/');
@@ -480,7 +700,7 @@ function render() {
   $('#nav').innerHTML = tabs.map(([u, l, i]) => `<a href="#/${u}" class="${u === (V[tab] ? tab : '') ? 'on' : ''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">${ic[i]}</svg>${l}</a>`).join('');
   lazyPhotos();
 }
-window.render = render; window.S = S;
+window.render = render; window.S = S; window.$ = $;
 db.onChange(() => {
   const a = document.activeElement;
   if ($('#sheet').classList.contains('show') || (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.type !== 'file')) { dirty = true; return; }
@@ -503,6 +723,7 @@ $('#fab').onclick = () => A.note();
     }
     await db.subscribe();
     db.purge();
+    purgeInterim();
     cfg(); planL();
     askPin();
     render();

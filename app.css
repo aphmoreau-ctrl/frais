@@ -71,3 +71,9 @@ video.scan{width:100%;border-radius:10px;background:#000;aspect-ratio:4/3;object
 select{width:100%;font:16px 'Barlow',sans-serif;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
 .field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}.field span{font-size:13px;color:var(--muted)}
 .del{background:none;border:0;color:var(--bad);font:inherit;cursor:pointer;padding:4px 8px}
+
+.pg{display:grid;grid-template-columns:78px repeat(7,minmax(38px,1fr));gap:4px;align-items:center;min-width:360px;font-size:13px}
+.pg .h{text-align:center;color:var(--muted);font-size:12px;line-height:1.2}.pg .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc{border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:6px;padding:7px 0;text-align:center;font:500 12px 'Barlow',sans-serif;cursor:pointer;min-height:34px}
+.pc.am{background:var(--blue-l);color:var(--blue);border-color:transparent}.pc.pm{background:var(--ok-l);color:var(--ok);border-color:transparent}
+.pc.abs{background:var(--bad-l);color:var(--bad);border-color:transparent}.pc.ex{outline:1.5px dashed var(--ink);outline-offset:-3px}.pc.off{border:0;background:transparent;cursor:default}

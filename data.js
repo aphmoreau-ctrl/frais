@@ -4,7 +4,7 @@
 import { firebaseConfig } from './firebase-config.js';
 
 export const MODE = firebaseConfig.apiKey ? 'cloud' : 'local';
-export const COLS = ['cfg', 'days', 'obs', 'suivis', 'ruptures', 'notes', 'actions', 'plan', 'meta'];
+export const COLS = ['cfg', 'days', 'obs', 'suivis', 'ruptures', 'notes', 'actions', 'plan', 'meta', 'people', 'fetes', 'carnet', 'retraits'];
 export const D = {};
 COLS.forEach(c => (D[c] = new Map()));
 
@@ -112,6 +112,7 @@ export function purge() {
   const lim = Date.now() - 30 * 864e5;
   COLS.forEach(c => [...D[c].values()].forEach(x => { if (x._del && x._del < lim) hardDel(c, x.id); }));
 }
+export function erase(c, id) { hardDel(c, id); emit(); }
 function hardDel(c, id) {
   D[c].delete(id);
   if (MODE === 'local') persistLocal(c);
