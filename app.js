@@ -404,14 +404,38 @@ A.rtDel = id => { const w = S.rw ?? new Date().getDay(), c = cfg(); setCfg({ rou
 A.rtCopy = () => { const w = S.rw ?? new Date().getDay(), c = cfg(); if (!confirm(`Copier la routine du ${JN[w].toLowerCase()} sur tous les jours qui ont déjà une routine ?`)) return; const r = { ...c.routine }; Object.keys(r).forEach(k => { if (+k !== w && (r[k] || []).length) r[k] = c.routine[w].map(x => ({ ...x })); }); setCfg({ routine: r }); toast('Routine copiée'); };
 
 // Sécurité
-V['r-securite'] = () => { const has = !!ls('frais_pin'), dl = ls('frais_lock') || '5'; return hdr('Code d\'accès', 'propre à chaque appareil', 1) + `<div class="list"><button class="row" onclick="A.pinSet()">${has ? 'Changer le code' : 'Créer un code à 4 chiffres'}</button>${has ? '<button class="row bad" onclick="A.pinOff()">Supprimer le code</button>' : ''}</div><h2>Verrouiller après</h2><div class="seg">${[['0', 'Immédiat'], ['5', '5 min'], ['30', '30 min']].map(([v, l]) => `<button class="${dl === v ? 'on-acc' : ''}" onclick="A.lockDelay('${v}')">${l}</button>`).join('')}</div>${db.MODE === 'cloud' ? '<div class="list mt"><button class="row bad" onclick="A.logout()">Se déconnecter de cet appareil</button></div>' : ''}`; };
+V['r-securite'] = () => { const has = !!ls('frais_pin'), dl = ls('frais_lock') || '5'; const bio = !!ls('frais_bio'); return hdr('Code d\'accès', 'propre à chaque appareil', 1) + `<div class="list"><button class="row" onclick="A.pinSet()">${has ? 'Changer le code' : 'Créer un code à 4 chiffres'}</button>${has ? '<button class="row bad" onclick="A.pinOff()">Supprimer le code</button>' : ''}</div><h2>Face ID ou Touch ID</h2><div class="list">${bio ? '<div class="row"><span class="grow">Activé sur cet appareil<div class="small muted">Le code à 4 chiffres reste en secours</div></span><span class="pill p-ok">Actif</span></div><button class="row" onclick="A.bioTest()">Tester le déverrouillage</button><button class="row bad" onclick="A.bioOff()">Désactiver Face ID</button>' : `<button class="row" onclick="A.bioOn()">Activer Face ID${has ? '' : '<div class=\'small muted\'>Un code à 4 chiffres sera d\'abord demandé, pour le secours</div>'}</button>`}</div><h2>Verrouiller après</h2><div class="seg">${[['0', 'Immédiat'], ['5', '5 min'], ['30', '30 min']].map(([v, l]) => `<button class="${dl === v ? 'on-acc' : ''}" onclick="A.lockDelay('${v}')">${l}</button>`).join('')}</div>${db.MODE === 'cloud' ? '<div class="list mt"><button class="row bad" onclick="A.logout()">Se déconnecter de cet appareil</button></div>' : ''}`; };
 const ls = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const lset = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} };
 const sha = async s => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('frais:' + s)))].map(b => b.toString(16).padStart(2, '0')).join('');
-A.pinSet = () => pinPad('Nouveau code', async p1 => pinPad('Confirme le code', async p2 => { if (p1 !== p2) { toast('Les deux codes sont différents'); hideLock(); return; } lset('frais_pin', await sha(p1)); hideLock(); toast('Code enregistré'); render(); }));
-A.pinOff = () => { if (confirm('Supprimer le code d\'accès sur cet appareil ?')) { lset('frais_pin', null); render(); } };
+A.pinSet = (then) => pinPad('Nouveau code', async p1 => pinPad('Confirme le code', async p2 => { if (p1 !== p2) { toast('Les deux codes sont différents'); hideLock(); return; } lset('frais_pin', await sha(p1)); hideLock(); toast('Code enregistré'); render(); if (typeof then === 'function') then(); }));
+A.pinOff = () => { if (confirm('Supprimer le code d\'accès sur cet appareil ? Face ID sera aussi désactivé.')) { lset('frais_pin', null); lset('frais_bio', null); render(); } };
 A.lockDelay = v => { lset('frais_lock', v); render(); };
 A.logout = async () => { if (confirm('Se déconnecter ? Les données restent en sécurité sur le serveur.')) { await db.logout(); location.reload(); } };
+
+// ---------- Face ID / Touch ID (WebAuthn, clé d'accès propre à cet appareil) ----------
+const b64 = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64 = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+const rnd = n => crypto.getRandomValues(new Uint8Array(n));
+async function bioAvailable() { try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (e) { return false; } }
+async function bioCheck() {
+  const id = ls('frais_bio'); if (!id) return false;
+  try {
+    const r = await navigator.credentials.get({ publicKey: { challenge: rnd(32), rpId: location.hostname, allowCredentials: [{ type: 'public-key', id: unb64(id), transports: ['internal'] }], userVerification: 'required', timeout: 60000 } });
+    return !!r;
+  } catch (e) { return false; }
+}
+A.bioOn = async () => {
+  if (!(await bioAvailable())) { alert('Face ID ou Touch ID n\'est pas disponible dans cette appli sur cet appareil. Le code à 4 chiffres reste utilisable.'); return; }
+  if (!ls('frais_pin')) { toast('Crée d\'abord un code de secours'); return A.pinSet(() => A.bioOn()); }
+  try {
+    const c = await navigator.credentials.create({ publicKey: { challenge: rnd(32), rp: { name: 'Rayons frais', id: location.hostname }, user: { id: rnd(16), name: 'frais-' + db.DEV, displayName: 'Rayons frais' }, pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' }, attestation: 'none', timeout: 60000 } });
+    lset('frais_bio', b64(c.rawId)); toast('Face ID activé'); render();
+  } catch (e) { alert('Activation annulée ou impossible : ' + (e.name === 'NotAllowedError' ? 'demande refusée ou expirée.' : e.message)); }
+};
+A.bioOff = () => { if (confirm('Désactiver Face ID sur cet appareil ?')) { lset('frais_bio', null); render(); } };
+A.bioTest = async () => { toast((await bioCheck()) ? 'Face ID fonctionne' : 'Échec : le code reste disponible'); };
+A.bioUnlock = async () => { if (await bioCheck()) hideLock(); };
 
 // Données
 V['r-donnees'] = () => { const lb = (db.get('meta', 'backup') || {}).ts; return hdr('Données', '', 1) + `<div class="card">Dernière sauvegarde : <b style="font-weight:600">${lb ? new Date(lb).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : 'jamais'}</b><div class="small muted">Une sauvegarde par mois, gardée hors de l'appli (ordinateur, disque externe).</div></div><button class="btn mt" onclick="A.exp()">Télécharger une sauvegarde complète</button><label class="btn sec mt" style="display:block">Restaurer une sauvegarde<input type="file" accept="application/json,.json" style="display:none" onchange="A.imp(this.files[0])"></label><h2>Effacement</h2><div class="list" style="border-color:var(--bad)"><button class="row bad" onclick="A.wipe()">Effacer toutes les données</button></div><div class="small muted mt">Les éléments supprimés restent 30 jours dans la corbeille, puis sont effacés définitivement.</div>`; };
@@ -433,13 +457,13 @@ A.close = () => { stopScan(); $('#sheet').classList.remove('show'); if (dirty) {
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet') A.close(); });
 
 // ---------- Verrouillage ----------
-function pinPad(title, cb) {
+function pinPad(title, cb, extra) {
   let v = '';
-  const draw = err => { $('#lock').innerHTML = `<h1>${title}</h1><div class="pin">${[0, 1, 2, 3].map(i => `<i class="${i < v.length ? 'on' : ''}"></i>`).join('')}</div>${err ? `<div class="bad small">${err}</div>` : '<div class="small muted">&nbsp;</div>'}<div class="pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9, '', 0, '⌫'].map(k => k === '' ? '<span></span>' : `<button data-k="${k}">${k}</button>`).join('')}</div>`; $('#lock').querySelectorAll('button').forEach(b => b.onclick = () => { const k = b.dataset.k; if (k === '⌫') v = v.slice(0, -1); else if (v.length < 4) v += k; draw(); if (v.length === 4) { const x = v; v = ''; cb(x, draw); } }); };
+  const draw = err => { $('#lock').innerHTML = `<h1>${title}</h1><div class="pin">${[0, 1, 2, 3].map(i => `<i class="${i < v.length ? 'on' : ''}"></i>`).join('')}</div>${err ? `<div class="bad small">${err}</div>` : '<div class="small muted">&nbsp;</div>'}<div class="pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9, '', 0, '⌫'].map(k => k === '' ? '<span></span>' : `<button data-k="${k}">${k}</button>`).join('')}</div>${extra || ''}`; $('#lock').querySelectorAll('button').forEach(b => b.onclick = () => { const k = b.dataset.k; if (k === '⌫') v = v.slice(0, -1); else if (v.length < 4) v += k; draw(); if (v.length === 4) { const x = v; v = ''; cb(x, draw); } }); };
   $('#lock').style.display = 'flex'; draw();
 }
 const hideLock = () => { $('#lock').style.display = 'none'; };
-function askPin() { const h = ls('frais_pin'); if (!h) return; pinPad('Code d\'accès', async (x, draw) => { if (await sha(x) === h) hideLock(); else draw('Code incorrect'); }); }
+function askPin() { const h = ls('frais_pin'); if (!h) return; const bio = !!ls('frais_bio'); pinPad(bio ? 'Déverrouiller' : 'Code d\'accès', async (x, draw) => { if (await sha(x) === h) hideLock(); else draw('Code incorrect'); }, bio ? '<button class="btn" style="max-width:260px;margin-top:6px" onclick="A.bioUnlock()">Utiliser Face ID</button><div class="small muted">ou tape ton code</div>' : ''); if (bio) setTimeout(() => A.bioUnlock(), 250); }
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else if (ls('frais_pin') && Date.now() - hiddenAt >= (+(ls('frais_lock') || 5)) * 6e4) askPin(); });
 
