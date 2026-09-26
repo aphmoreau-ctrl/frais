@@ -4,7 +4,7 @@
 import { firebaseConfig } from './firebase-config.js';
 
 export const MODE = firebaseConfig.apiKey ? 'cloud' : 'local';
-export const COLS = ['cfg', 'days', 'obs', 'suivis', 'ruptures', 'notes', 'actions', 'plan', 'meta', 'people', 'fetes', 'carnet', 'retraits'];
+export const COLS = ['cfg', 'days', 'obs', 'suivis', 'ruptures', 'notes', 'actions', 'plan', 'meta', 'people', 'fetes', 'carnet', 'retraits', 'formations', 'entretiens', 'semaines', 'casse', 'lots'];
 export const D = {};
 COLS.forEach(c => (D[c] = new Map()));
 

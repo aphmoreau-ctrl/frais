@@ -77,3 +77,5 @@ select{width:100%;font:16px 'Barlow',sans-serif;padding:10px;border:1px solid va
 .pc{border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:6px;padding:7px 0;text-align:center;font:500 12px 'Barlow',sans-serif;cursor:pointer;min-height:34px}
 .pc.am{background:var(--blue-l);color:var(--blue);border-color:transparent}.pc.pm{background:var(--ok-l);color:var(--ok);border-color:transparent}
 .pc.abs{background:var(--bad-l);color:var(--bad);border-color:transparent}.pc.ex{outline:1.5px dashed var(--ink);outline-offset:-3px}.pc.off{border:0;background:transparent;cursor:default}
+
+@media print{nav.bottom,.fab,.noprint,.toast,header .back,.sheet{display:none!important}body{background:#fff;color:#000}.app{max-width:none;padding:0 8mm}.card,.kpi,.list{break-inside:avoid}}

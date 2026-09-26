@@ -1,4 +1,4 @@
-const V='frais-v2.0.0';
+const V='frais-v4.0.0';
 const SHELL=['./','./index.html','./app.css','./app.js','./data.js','./seed.js','./firebase-config.js','./zxing-browser.min.js','./manifest.webmanifest','./icon-192.png','./icon-180.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(V).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==V).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
