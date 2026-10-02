@@ -36,7 +36,6 @@ function routine(d) {
   const w = new Date(d + 'T12:00').getDay();
   const base = (cfg().routine[w] || []).map(x => ({ ...x }));
   const auto = inFetes(d) && db.all('fetes').length ? [{ id: 'fetes-auto', t: 'Pré-commandes fêtes', h: '14:00', go: 'fetes' }] : [];
-  if (db.all('lots').some(l => l.date === addDays(d, -1))) auto.push({ id: 'dem-auto', t: 'Résultat démarque d\'hier', h: '07:00', go: 'demarque' });
   return base.concat(auto, day(d).extra || []).sort((a, b) => a.h.localeCompare(b.h));
 }
 function markTask(go) {
@@ -75,7 +74,7 @@ const V = {};
 let S = {}; // état d'écran (non enregistré)
 
 // ---------- Accueil ----------
-V[''] = () => {
+V['journee'] = () => {
   const d = today(), dd = day(d), rt = routine(d);
   const nx = rt.find(x => !dd.done[x.id]);
   const nd = rt.filter(x => dd.done[x.id]).length;
@@ -89,7 +88,7 @@ V[''] = () => {
   const plan = db.all('plan').length ? db.all('plan') : PLAN;
   const cur = plan.find(p => p.du <= d && p.au >= d);
   const ag = AGENDA.filter(([dt]) => dt >= d).slice(0, 3);
-  return hdr(cap(fDate(d)), 'Ma journée · ' + syncLbl()) +
+  return hdr('Ma journée', cap(fDate(d)) + ' · ' + syncLbl(), 1) +
     (db.MODE === 'local' ? '<div class="proto">Mode essai : les données restent sur cet appareil. Configure Firebase pour la synchronisation.</div>' : '') +
     (nx ? `<a class="next" href="${GO[nx.go] || '#/'}" ${nx.go === 'libre' ? `onclick="A.toggleTask('${d}','${nx.id}');return false"` : ''}><div class="l">Prochaine chose à faire · ${fmtH(nx.h)}</div><div class="t">${esc(nx.t)} ›</div></a>`
       : `<a class="next" href="#/bilan"><div class="l">${rt.length ? 'Routine terminée' : 'Pas de routine aujourd\'hui'}</div><div class="t">${dd.clos ? 'Journée clôturée ✓' : 'Bilan de fin de journée ›'}</div></a>`) +
@@ -112,7 +111,7 @@ V['saisir'] = () => hdr('Saisir', 'l\'heure et le rayon se remplissent tout seul
   `<div class="tiles"><a class="tile main" href="#/tournee">Démarrer ma tournée<small>Les rayons s'enchaînent dans ton ordre de passage</small></a>
   <a class="tile" href="#/ruptures">Rupture<small>scan ou favori</small></a><button class="tile" onclick="A.note()">Note<small>dictée possible</small></button>
   <button class="tile" onclick="A.photoNote()">Photo<small>avec une note</small></button><a class="tile" href="#/suivis">Suivis<small>problèmes ouverts</small></a>
-  <button class="tile" onclick="A.casseAdd()">Casse<small>produit, quantité, motif</small></button><button class="tile" onclick="A.lotAdd()">Lot du soir<small>−30 % / −50 %</small></button>
+  <button class="tile" onclick="A.casseAdd()">Casse<small>produit, quantité, motif</small></button><a class="tile" href="#/saisie-chiffres">Chiffres du jour<small>ventes et achats par rayon</small></a>
   <a class="tile" href="#/presents">Absence<small>sans motif</small></a><a class="tile" href="#/presents">Consigne<small>par rayon</small></a>
   <a class="tile" href="#/fetes">Fêtes<small>pré-commandes</small></a><a class="tile" href="#/carnet">Carnet des fêtes<small>à noter le soir</small></a>
   <a class="tile main" href="#/bilan" style="background:var(--card);color:var(--ink);border-color:var(--line)">Bilan de fin de journée<small style="color:var(--muted)">compléter ce qui manque</small></a></div>
@@ -709,8 +708,9 @@ const weekDays = w => [...Array(7)].map((_, i) => addDays(w, i));
 const ruptW = (w, r) => { const e = addDays(w, 7); return db.all('ruptures').filter(x => x.date >= w && x.date < e && (!r || x.rayon === r)).length; };
 const obsOkW = (w, r) => { const e = addDays(w, 7); const it = db.all('obs').filter(o => o.date >= w && o.date < e && (!r || o.rayon === r)).flatMap(o => o.items); return it.length ? it.filter(i => i.s === 'ok').length / it.length * 100 : null; };
 function kpiW(w, r) {
-  const s = semDoc(w, r), ca = +s.ca || null, n1 = +s.can1 || null, h = +s.heures || null;
-  return { ca, n1, ecart: ca && n1 ? (ca / n1 - 1) * 100 : null, marge: s.marge != null && s.marge !== '' ? +s.marge : null, dem: s.demarque != null && s.demarque !== '' ? +s.demarque : null, rupt: ruptW(w, r), h, cah: ca && h ? ca / h : null, obs: obsOkW(w, r) };
+  const s = semDoc(w, r), dj = kJ(w, addDays(w, 6), r), ca = dj.ventes != null ? dj.ventes : (+s.ca || null), n1 = +s.can1 || null, h = +s.heures || null;
+  const demS = s.demarque != null && s.demarque !== '' ? +s.demarque : null;
+  return { ca, n1, ecart: ca && n1 ? (ca / n1 - 1) * 100 : null, marge: s.marge != null && s.marge !== '' ? +s.marge : null, dem: dj.ventes && dj.nCasse ? dj.casse / dj.ventes * 100 : demS, rupt: ruptW(w, r), h, cah: ca && h ? ca / h : null, obs: obsOkW(w, r) };
 }
 function kpiTot(w) {
   const rs = rayons().map(r => ({ r, k: kpiW(w, r.id) })), f = rs.filter(x => x.k.ca);
@@ -730,7 +730,7 @@ function col(key, v, r) {
 }
 
 // ---------- Tableau de bord ----------
-V['pilotage'] = () => hdr('Pilotage') + `<div class="list">${lk('#/tdb', 'Tableau de bord de la semaine')}${lk('#/tendances', 'Évolution sur 52 semaines')}${lk('#/previsions', 'Prévisions ventes et personnel')}${lk('#/couverture', 'Couverture heure par heure')}${lk('#/simulateur', 'Simulateur d\'heures')}${lk('#/demarque', 'Démarque et lots du soir')}${lk('#/actions', 'Actions et pilotes', (() => { const n = db.all('actions').filter(a => !['fait', 'abandon'].includes(a.statut) && a.echeance && a.echeance < today()).length; return n ? `<span class="pill p-bad">${n} en retard</span>` : ''; })())}${lk('#/plans', 'Plans d\'action par rayon')}${lk('#/rapports', 'Rapports')}</div>`;
+V['pilotage'] = () => hdr('Pilotage') + `<div class="list">${lk('#/tdb', 'Tableau de bord de la semaine')}${lk('#/tendances', 'Évolution sur 52 semaines')}${lk('#/previsions', 'Prévisions ventes et personnel')}${lk('#/couverture', 'Couverture heure par heure')}${lk('#/simulateur', 'Simulateur d\'heures')}${lk('#/saisie-chiffres', 'Chiffres du jour')}${lk('#/demarque', 'Démarque')}${lk('#/actions', 'Actions et pilotes', (() => { const n = db.all('actions').filter(a => !['fait', 'abandon'].includes(a.statut) && a.echeance && a.echeance < today()).length; return n ? `<span class="pill p-bad">${n} en retard</span>` : ''; })())}${lk('#/plans', 'Plans d\'action par rayon')}${lk('#/rapports', 'Rapports')}</div>`;
 V['tdb'] = () => {
   const w = S.tdW || addDays(wk(today()), -7), prev = addDays(w, -7);
   const avg4 = (r, key) => { const v = [1, 2, 3, 4].map(i => kpiW(addDays(w, -7 * i), r)[key]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b) / v.length : null; };
@@ -750,7 +750,7 @@ V['chiffres'] = (w0) => {
   return hdr('Chiffres de la semaine', `du ${fDate(w, { day: 'numeric', month: 'long' })} au ${fDate(addDays(w, 6), { day: 'numeric', month: 'long' })}`, 1) +
     `<div class="seg" style="margin-bottom:10px"><button onclick="location.hash='#/chiffres/${addDays(w, -7)}'">‹ Préc.</button><button onclick="location.hash='#/chiffres/${addDays(wk(today()), -7)}'">Dernière</button><button onclick="location.hash='#/chiffres/${addDays(w, 7)}'">Suiv. ›</button></div>` +
     rayons().map(r => { const s = semDoc(w, r.id); return `<div class="card" style="margin-bottom:8px"><div style="margin-bottom:6px">${tag(r.id)}${esc(r.nom)}</div><div class="grid2">${[['ca', 'CA semaine (€)'], ['can1', 'CA même semaine N-1 (€)'], ['marge', 'Marge %'], ['demarque', 'Démarque %'], ['heures', 'Heures travaillées']].map(([k, l]) => `<label class="small muted">${l}<input type="number" inputmode="decimal" step="any" data-w="${r.id}" data-k="${k}" value="${s[k] ?? ''}"></label>`).join('')}<div class="small muted" style="align-self:end">Ruptures : ${ruptW(w, r.id)} (auto)</div></div></div>`; }).join('') +
-    `<button class="btn" onclick="A.chSave('${w}')">Enregistrer</button><div class="small muted mt">Tu peux saisir à l'avance le CA N-1 des semaines à venir : il sert de base aux prévisions.</div>`;
+    `<button class="btn" onclick="A.chSave('${w}')">Enregistrer</button><div class="small muted mt">Tu peux saisir à l'avance le CA N-1 des semaines à venir : il sert de base aux prévisions. Quand les chiffres du jour sont saisis, le CA et la démarque de la semaine sont calculés automatiquement à partir d'eux.</div>`;
 };
 A.chSave = w => { const m = {}; document.querySelectorAll('[data-w]').forEach(i => { (m[i.dataset.w] = m[i.dataset.w] || {})[i.dataset.k] = i.value === '' ? null : +i.value.replace(',', '.'); }); Object.entries(m).forEach(([r, o]) => db.put('semaines', { ...semDoc(w, r), ...o })); toast('Chiffres enregistrés'); history.back(); };
 V['tendances'] = () => {
@@ -861,21 +861,10 @@ A.objSave = r => { const o = {}, d = {}; document.querySelectorAll('[data-o]').f
 
 // ---------- Démarque (V4) ----------
 const lotsOf = d => db.all('lots').filter(l => l.date === d);
-V['demarque'] = () => {
-  const y = addDays(today(), -1), ly = lotsOf(y), lt = lotsOf(today()), r = S.dmR || lastRayon;
-  const since = addDays(today(), -28), lots28 = db.all('lots').filter(l => l.date >= since && l.vendu != null), q = lots28.reduce((t, l) => t + (+l.qte || 0), 0), v = lots28.reduce((t, l) => t + (+l.vendu || 0), 0);
-  const recup = lots28.reduce((t, l) => t + (l.valeur && l.qte ? l.valeur * (l.vendu / l.qte) * (1 - l.taux / 100) : 0), 0);
-  const top = {}; db.all('casse').filter(c => c.date >= since && c.rayon === r).forEach(c => top[c.nom] = (top[c.nom] || 0) + (+c.valeur || +c.qte || 0)); db.all('lots').filter(l => l.date >= since && l.rayon === r && l.jete).forEach(l => top[l.nom] = (top[l.nom] || 0) + (l.valeur && l.qte ? l.valeur / l.qte * l.jete : l.jete));
-  const tl = Object.entries(top).sort((a, b) => b[1] - a[1]).slice(0, 20), tt = tl.reduce((t, x) => t + x[1], 0) || 1;
-  const lotRow = l => `<div class="card" style="margin-bottom:8px"><div style="display:flex;justify-content:space-between"><span>${tag(l.rayon)}${esc(l.nom)} · ${l.qte} × −${l.taux} %</span><span class="small muted">${hm(l.ts)}</span></div><div class="grid2" style="margin-top:6px"><label class="small muted">Vendu<input type="number" inputmode="numeric" value="${l.vendu ?? ''}" onchange="A.lotRes('${l.id}','vendu',this.value)"></label><label class="small muted">Jeté<input type="number" inputmode="numeric" value="${l.jete ?? ''}" onchange="A.lotRes('${l.id}','jete',this.value)"></label></div></div>`;
-  return hdr('Démarque', 'casse et lots du soir', 1) + `<h2>Lots d'hier soir · à compléter</h2>${ly.length ? ly.map(lotRow).join('') : '<div class="small muted">Aucun lot hier.</div>'}` + (lt.length ? `<h2>Lots de ce soir</h2>${lt.map(l => `<div class="row" style="padding:6px 0"><span class="grow">${tag(l.rayon)}${esc(l.nom)} · ${l.qte} × −${l.taux} %</span><button class="del" onclick="A.lotD('${l.id}')">×</button></div>`).join('')}` : '') +
-    `<div class="btns"><button class="btn sec" onclick="A.casseAdd()">Saisir une casse</button><button class="btn" onclick="A.lotAdd()">Nouveau lot −30/−50</button></div>` +
-    `<div class="grid2 mt"><div class="kpi"><div class="l">Récupération 4 sem.</div><div class="v ${q && v / q >= 0.7 ? 'ok' : 'warn'}">${q ? nf(v / q * 100, 0) + ' %' : '—'}</div><div class="s">vendu sur démarqué</div></div><div class="kpi"><div class="l">Valeur récupérée</div><div class="v">${recup ? money(eur(recup), '•••• €') : '—'}</div><div class="s">si prix saisis</div></div></div>` +
-    `<h2>Produits qui démarquent le plus · 4 sem.</h2>${chipsRay(r, 'dmR')}${tl.length ? `<div class="list">${tl.map(([n, x], i) => `<div class="row"><span class="muted" style="width:20px">${i + 1}</span><span class="grow">${esc(n)}</span><span class="${i < 3 ? 'bad' : ''}">${nf(x / tt * 100, 0)} %</span></div>`).join('')}</div><div class="small muted mt">% = part de la démarque suivie du rayon.</div>` : '<div class="small muted">Pas encore de casse saisie pour ce rayon.</div>'}`;
-};
+V['demarque'] = () => { const r = S.dmR || lastRayon; return hdr('Démarque', 'casse : marchandise sortie sans être vendue', 1) + chipsRay(r, 'dmR') + casseBloc(r); };
 A.dmR = id => { S.dmR = id; setRay(id); render(); };
 const prodSel = () => `<div class="field"><span>Rayon</span><select id="dr">${rayons().map(r => `<option value="${r.id}" ${r.id === lastRayon ? 'selected' : ''}>${esc(r.nom)}</option>`).join('')}</select></div><div class="field"><span>Produit</span><input type="text" id="dn" list="dpl" autocomplete="off"><datalist id="dpl">${(cfg().produits || []).map(p => `<option value="${esc(p.nom)}">`).join('')}</datalist></div>`;
-A.casseAdd = () => sheet(`<h2 style="margin-top:0">Casse</h2>${prodSel()}<div class="grid2"><div class="field"><span>Quantité</span><input type="number" inputmode="decimal" id="dq"></div><div class="field"><span>Valeur (€, facultatif)</span><input type="number" inputmode="decimal" step="0.01" id="dv"></div></div><div class="field"><span>Motif</span><div class="chips" id="dm">${['Date dépassée', 'Abîmé', 'Casse', 'Autre'].map((m, i) => `<button class="chip ${i ? '' : 'on'}" onclick="document.querySelectorAll('#dm .chip').forEach(c=>c.classList.remove('on'));this.classList.add('on')">${m}</button>`).join('')}</div></div><div class="btns"><button class="btn sec" onclick="A.close()">Annuler</button><button class="btn" onclick="A.casseSave()">Enregistrer</button></div>`, '#dn');
+A.casseAdd = () => sheet(`<h2 style="margin-top:0">Casse</h2>${prodSel()}<div class="grid2"><div class="field"><span>Quantité</span><input type="number" inputmode="decimal" id="dq"></div><div class="field"><span>Valeur au prix d'achat (€)</span><input type="number" inputmode="decimal" step="0.01" id="dv"></div></div><div class="field"><span>Motif</span><div class="chips" id="dm">${['Date dépassée', 'Abîmé', 'Casse', 'Tri, parage', 'Chaîne du froid', 'Consommation interne', 'Autre'].map((m, i) => `<button class="chip ${i ? '' : 'on'}" onclick="document.querySelectorAll('#dm .chip').forEach(c=>c.classList.remove('on'));this.classList.add('on')">${m}</button>`).join('')}</div></div><div class="btns"><button class="btn sec" onclick="A.close()">Annuler</button><button class="btn" onclick="A.casseSave()">Enregistrer</button></div>`, '#dn');
 A.casseSave = () => { const n = $('#dn').value.trim(); if (!n) { $('#dn').style.borderColor = 'var(--bad)'; return; } setRay($('#dr').value); db.put('casse', { date: today(), ts: Date.now(), rayon: $('#dr').value, nom: n, qte: +$('#dq').value || 0, valeur: +$('#dv').value || null, motif: document.querySelector('#dm .chip.on').textContent }); A.close(); toast('Casse enregistrée'); };
 A.lotAdd = () => sheet(`<h2 style="margin-top:0">Lot du soir</h2>${prodSel()}<div class="grid2"><div class="field"><span>Quantité</span><input type="number" inputmode="numeric" id="dq"></div><div class="field"><span>Valeur avant remise (€, facultatif)</span><input type="number" inputmode="decimal" step="0.01" id="dv"></div></div><div class="field"><span>Remise</span><div class="seg two" id="dt"><button class="on-acc" data-t="30" onclick="this.classList.add('on-acc');this.nextElementSibling.classList.remove('on-acc')">−30 %</button><button data-t="50" onclick="this.classList.add('on-acc');this.previousElementSibling.classList.remove('on-acc')">−50 %</button></div></div><div class="btns"><button class="btn sec" onclick="A.close()">Annuler</button><button class="btn" onclick="A.lotSave()">Enregistrer</button></div>`, '#dn');
 A.lotSave = () => { const n = $('#dn').value.trim(), q = +$('#dq').value; if (!n || !q) { toast('Produit et quantité requis'); return; } setRay($('#dr').value); db.put('lots', { date: today(), ts: Date.now(), rayon: $('#dr').value, nom: n, qte: q, valeur: +$('#dv').value || null, taux: +document.querySelector('#dt .on-acc').dataset.t }); A.close(); toast('Lot enregistré'); };
@@ -993,7 +982,7 @@ A.afSave = r => { const af = {}, pj = {}; document.querySelectorAll('[data-af]')
 
 // ---------- Rapports (V3) ----------
 const printBtn = '<button class="btn mt noprint" onclick="window.print()">Exporter en PDF</button><div class="small muted mt noprint">Sur iPhone : Imprimer, puis écarte deux doigts sur l\'aperçu et Partager pour enregistrer le PDF.</div>';
-V['rapports'] = () => hdr('Rapports', 'export PDF en un geste', 1) + `<div class="list">${lk('#/r-mardi', 'Point du mardi')}${lk('#/r-mensuel', 'Bilan mensuel')}${lk('#/actions', 'Bilan d\'un pilote (depuis la fiche du pilote)')}${lk('#/r-restit', 'Restitution (3 mois)')}${lk('#/r-fetes', 'Bilan des fêtes')}</div><h2>Exports Excel</h2><div class="list">${[['ruptures', 'Ruptures'], ['obs', 'Observations'], ['semaines', 'Chiffres des semaines'], ['casse', 'Casse'], ['lots', 'Lots du soir'], ['actions', 'Actions']].map(([c, l]) => `<button class="row" onclick="A.csv('${c}')"><span class="grow">${l}</span><span class="small acc">CSV</span></button>`).join('')}</div><div class="small muted mt">Les fichiers CSV s'ouvrent dans Excel ou Numbers.</div>`;
+V['rapports'] = () => hdr('Rapports', 'export PDF en un geste', 1) + `<div class="list">${lk('#/r-mardi', 'Point du mardi')}${lk('#/r-mensuel', 'Bilan mensuel')}${lk('#/actions', 'Bilan d\'un pilote (depuis la fiche du pilote)')}${lk('#/r-restit', 'Restitution (3 mois)')}${lk('#/r-fetes', 'Bilan des fêtes')}</div><h2>Exports Excel</h2><div class="list">${[['ruptures', 'Ruptures'], ['obs', 'Observations'], ['semaines', 'Chiffres des semaines'], ['casse', 'Casse'], ['chiffres', 'Chiffres du jour'], ['actions', 'Actions']].map(([c, l]) => `<button class="row" onclick="A.csv('${c}')"><span class="grow">${l}</span><span class="small acc">CSV</span></button>`).join('')}</div><div class="small muted mt">Les fichiers CSV s'ouvrent dans Excel ou Numbers.</div>`;
 A.csv = c => { const l = db.all(c); if (!l.length) { toast('Aucune donnée'); return; } const flat = o => Object.fromEntries(Object.entries(o).filter(([k]) => !['dev', 'upd', 'ph'].includes(k)).map(([k, v]) => [k, typeof v === 'object' && v ? JSON.stringify(v) : v])); const rows = l.map(flat), keys = [...new Set(rows.flatMap(Object.keys))]; const q = v => { const s = String(v ?? '').replace(/"/g, '""'); return /[;"\n]/.test(s) ? `"${s}"` : s; }; const txt = '\ufeff' + keys.join(';') + '\n' + rows.map(r => keys.map(k => q(r[k])).join(';')).join('\n'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv' })); a.download = `rayons-frais-${c}-${today()}.csv`; document.body.appendChild(a); a.click(); a.remove(); };
 function faitsCand(w) {
   const out = [];
@@ -1067,9 +1056,147 @@ function alertsV34() {
 }
 
 // ---------- Navigation ----------
+// ================= Application unique : accueil par rayon, chiffres du jour, démarque =================
+const ICR = { fl: '🍎', bo: '🥩', tr: '🥓', cr: '🧀', bl: '🥖' };
+const SOUS = { fl: 'Saisonnalité, météo, casse', bo: 'Pièces, rendements, DLC', tr: 'Coupe, DLC, casse', cr: 'Rotation, DLC, ruptures', bl: 'Production, invendus' };
+const icR = r => ICR[r.id] || esc((r.court || r.nom || '?').charAt(0));
+const chDoc = (d, r) => db.get('chiffres', `${d}_${r}`) || { id: `${d}_${r}`, date: d, rayon: r };
+// Chiffres d'une période (r vide = tous les rayons) : ventes, achats, casse saisie et casse déclarée dans le système.
+function kJ(d1, d2, r) {
+  const ch = db.all('chiffres').filter(c => c.date >= d1 && c.date <= d2 && (!r || c.rayon === r));
+  const has = k => ch.some(c => c[k] != null && c[k] !== '');
+  const sum = k => ch.reduce((t, c) => t + (+c[k] || 0), 0);
+  const cs = db.all('casse').filter(c => c.date >= d1 && c.date <= d2 && (!r || c.rayon === r));
+  return { ventes: has('ventes') ? sum('ventes') : null, achats: has('achats') ? sum('achats') : null, casseSys: has('casseSys') ? sum('casseSys') : null,
+    casse: cs.reduce((t, c) => t + (+c.valeur || 0), 0), nCasse: cs.length, sansVal: cs.filter(c => !(+c.valeur)).length };
+}
+const ratio = (a, b) => a != null && b ? a / b * 100 : null;
+const cRatio = k => k.nCasse ? ratio(k.casse, k.ventes) : null; // pas de casse saisie : pas de pourcentage
+const fl = v => v == null ? '' : (v >= 0 ? '↗ ' : '↘ ');
+const homeDay = () => S.hjD || (db.all('chiffres').some(c => c.date === today() && c.ventes != null) ? today() : addDays(today(), -1));
+const jLbl = j => j === today() ? 'Aujourd\'hui' : j === addDays(today(), -1) ? 'Hier' : cap(fDate(j, { weekday: 'long', day: 'numeric', month: 'long' }));
+A.hj = n => { const j = addDays(homeDay(), n); if (j <= today()) S.hjD = j; render(); };
+
+V[''] = () => {
+  const d = today(), dd = day(d), rt = routine(d), nx = rt.find(x => !dd.done[x.id]), nd = rt.filter(x => dd.done[x.id]).length, al = alerts();
+  const j = homeDay(), t = kJ(j, j, ''), t7 = kJ(addDays(j, -7), addDays(j, -7), '');
+  const hier = addDays(d, -1), manque = !db.all('chiffres').some(c => c.date === hier && c.ventes != null);
+  const ev = t.ventes && t7.ventes ? (t.ventes / t7.ventes - 1) * 100 : null, cp = cRatio(t);
+  return hdr(cap(fDate(d)), 'Accueil · ' + syncLbl()) +
+    (db.MODE === 'local' ? '<div class="proto">Mode essai : les données restent sur cet appareil.</div>' : '') +
+    (nx ? `<a class="next" href="${GO[nx.go] || '#/journee'}" ${nx.go === 'libre' ? `onclick="A.toggleTask('${d}','${nx.id}');return false"` : ''}><div class="l">Prochaine chose à faire · ${fmtH(nx.h)}</div><div class="t">${esc(nx.t)} ›</div></a>`
+      : `<a class="next" href="#/bilan"><div class="l">${rt.length ? 'Routine terminée' : 'Pas de routine aujourd\'hui'}</div><div class="t">${dd.clos ? 'Journée clôturée ✓' : 'Bilan de fin de journée ›'}</div></a>`) +
+    `<div class="grid2 mt"><a class="kpi" href="#/journee" style="color:inherit;text-decoration:none"><div class="l">Ma journée</div><div class="v">${nd} / ${rt.length}</div><div class="s">tâches faites</div></a><a class="kpi" href="#/journee" style="color:inherit;text-decoration:none"><div class="l">Alertes</div><div class="v ${al.length ? 'warn' : 'ok'}">${al.length}</div><div class="s">${al.length ? 'à regarder' : 'tout va bien'}</div></a></div>` +
+    (manque ? `<a class="alert a-acc" style="display:block;text-decoration:none;margin-top:10px" href="#/saisie-chiffres/${hier}">Saisir les chiffres d'hier ›</a>` : '') +
+    `<div class="dnav"><button class="chip" onclick="A.hj(-1)" aria-label="Jour précédent">‹</button><b>${jLbl(j)}</b><button class="chip" ${j >= d ? 'disabled' : ''} onclick="A.hj(1)" aria-label="Jour suivant">›</button></div>` +
+    `<div class="tot"><div><span class="l">CA frais</span><b>${t.ventes != null ? money(eur(t.ventes), '•••• €') : '—'}</b><span class="s ${ev == null ? '' : ev >= 0 ? 'ok' : 'bad'}">${ev == null ? '' : fl(ev) + pct(ev) + ' vs sem. préc.'}</span></div><div><span class="l">Casse</span><b class="${cp != null ? 'bad' : ''}">${cp != null ? nf(cp, 1) + ' %' : '—'}</b><span class="s">${t.nCasse} ligne${t.nCasse > 1 ? 's' : ''}</span></div><div><span class="l">Achats / ventes</span><b>${ratio(t.achats, t.ventes) != null ? nf(ratio(t.achats, t.ventes), 0) + ' %' : '—'}</b><span class="s">${t.achats != null ? money(eur(t.achats), '•••• €') : ''}</span></div></div>` +
+    `<div class="rcards">${rayons().map(r => rCard(r, j)).join('')}</div>` +
+    `<div class="small muted mt">${discret ? 'Montants masqués : touche un montant en pointillé pour le voir.' : 'Montants affichés.'} <a href="javascript:void 0" onclick="A.discretT()">${discret ? 'Tout afficher' : 'Masquer'}</a></div>`;
+};
+function rCard(r, j) {
+  const k = kJ(j, j, r.id), p = kJ(addDays(j, -7), addDays(j, -7), r.id);
+  const ev = k.ventes && p.ventes ? (k.ventes / p.ventes - 1) * 100 : null;
+  const cp = cRatio(k), cpp = cRatio(p), dc = cp != null && cpp != null ? cp - cpp : null;
+  const m = kpiW(addDays(wk(today()), -7), r.id).marge;
+  return `<div class="rcard" role="link" tabindex="0" style="--rc:${r.couleur}" onclick="S.rTab='jour';location.hash='#/rayon/${r.id}'" onkeydown="if(event.key==='Enter')this.click()">
+    <div class="rc-h"><span class="rc-i">${icR(r)}</span><span class="grow"><b>${esc(r.nom)}</b><small>${esc(SOUS[r.id] || '')}</small></span><span class="rc-go">›</span></div>
+    <div class="rc-k">
+      <div><span class="l">CA</span><b>${k.ventes != null ? money(eur(k.ventes), '•••• €') : '—'}</b><span class="s ${ev == null ? '' : ev >= 0 ? 'ok' : 'bad'}">${ev == null ? '&nbsp;' : fl(ev) + pct(ev, 0)}</span></div>
+      <div><span class="l">Casse</span><b class="${cp != null ? 'bad' : ''}">${cp != null ? nf(cp, 1) + ' %' : k.nCasse ? k.nCasse + ' l.' : '—'}</b><span class="s ${dc == null ? '' : dc <= 0 ? 'ok' : 'bad'}">${dc == null ? '&nbsp;' : (dc > 0 ? '↗ +' : '↘ ') + nf(dc, 1) + ' pt'}</span></div>
+      <div><span class="l">Marge sem.</span><b>${m != null ? nf(m, 1) + ' %' : '—'}</b><span class="s">&nbsp;</span></div>
+    </div></div>`;
+}
+
+// ---------- Page d'un rayon ----------
+const RTABS = [['jour', 'Aujourd\'hui'], ['casse', 'Casse'], ['stock', 'Stock'], ['produits', 'Produits'], ['commandes', 'Commandes'], ['analyses', 'Analyses']];
+V['rayon'] = id => {
+  const r = cfg().rayons.find(x => x.id === id);
+  if (!r) return hdr('Rayon introuvable', '', 1);
+  const t = S.rTab || 'jour';
+  const body = { jour: rJour, casse: x => casseBloc(x.id), stock: rStock, produits: rProduits, commandes: rCommandes, analyses: rAnalyses }[t] || rJour;
+  return `<div class="rhero" style="--rc:${r.couleur}"><button class="back" onclick="history.back()" aria-label="Retour">‹</button><span class="rc-i">${icR(r)}</span><div style="flex:1;min-width:0"><h1>${esc(r.nom)}</h1><div class="sub">${esc(SOUS[r.id] || '')}</div></div></div>` +
+    `<div class="rtabs" style="--rc:${r.couleur}">${RTABS.map(([k, l]) => `<button class="${t === k ? 'on' : ''}" onclick="S.rTab='${k}';render()">${l}</button>`).join('')}</div>` + body(r);
+};
+function rJour(r) {
+  const j = homeDay(), k = kJ(j, j, r.id), d = today();
+  const rup = db.all('ruptures').filter(x => x.date === d && x.rayon === r.id).length;
+  const su = db.all('suivis').filter(s => !s.closeTs && s.rayon === r.id);
+  const ac = db.all('actions').filter(a => a.rayon === r.id && !['fait', 'abandon'].includes(a.statut));
+  const cp = cRatio(k), ap = ratio(k.achats, k.ventes);
+  return `<div class="small muted" style="margin-bottom:6px">Chiffres : ${jLbl(j).toLowerCase()}</div><div class="grid2">
+    <div class="kpi"><div class="l">CA HT</div><div class="v">${k.ventes != null ? money(eur(k.ventes), '•••• €') : '—'}</div></div>
+    <div class="kpi"><div class="l">Casse</div><div class="v ${cp ? 'bad' : ''}">${cp != null ? nf(cp, 1) + ' %' : '—'}</div><div class="s">${k.nCasse} ligne${k.nCasse > 1 ? 's' : ''}</div></div>
+    <div class="kpi"><div class="l">Achats / ventes</div><div class="v">${ap != null ? nf(ap, 0) + ' %' : '—'}</div></div>
+    <a class="kpi" href="#/ruptures-stats" style="color:inherit;text-decoration:none"><div class="l">Ruptures aujourd'hui</div><div class="v ${rup ? 'warn' : ''}">${rup}</div></a></div>` +
+    (r.id === 'fl' ? `<h2>Météo à Vesoul</h2><div class="card"><div id="meteo"><span class="small muted" style="grid-column:1/-1">Chargement…</span></div></div>` : '') +
+    `<h2>À faire et points ouverts</h2><div class="list">${su.map(s => `<a class="row" href="#/suivis"><span class="pill p-${s.type === 'temp' ? 'bad' : 'warn'}">${s.type === 'temp' ? 'Température' : 'Problème'}</span><span class="grow">${esc(s.crit)}</span><span class="chev">›</span></a>`).join('')}${ac.map(a => `<a class="row" href="#/action/${a.id}"><span class="pill p-n">Action</span><span class="grow">${esc(a.titre)}</span><span class="small ${a.echeance && a.echeance < d ? 'bad' : 'muted'}">${a.echeance ? fDate(a.echeance, { day: 'numeric', month: 'short' }) : ''}</span></a>`).join('') || '<div class="empty">Rien en attente pour ce rayon.</div>'}</div>` +
+    `<div class="btns"><button class="btn sec" onclick="setRay('${r.id}');A.casseAdd()">Saisir une casse</button><a class="btn sec" href="#/ruptures" onclick="setRay('${r.id}')">Rupture</a></div>
+    <a class="btn mt" href="#/saisie-chiffres">Saisir les chiffres du jour</a>`;
+}
+function casseBloc(rid) {
+  const d = today(), d7 = addDays(d, -6), d28 = addDays(d, -27);
+  const k7 = kJ(d7, d, rid), cp = cRatio(k7);
+  const l = db.all('casse').filter(c => c.rayon === rid && c.date >= d28).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const top = {}; l.forEach(c => { top[c.nom] = (top[c.nom] || 0) + (+c.valeur || 0); });
+  const tl = Object.entries(top).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 10), tt = tl.reduce((t, x) => t + x[1], 0) || 1;
+  const ecart = k7.casseSys != null ? k7.casse - k7.casseSys : null;
+  return `<div class="grid2"><div class="kpi"><div class="l">Casse 7 jours</div><div class="v bad">${cp != null ? nf(cp, 2) + ' %' : money(eur(k7.casse), '•••• €')}</div><div class="s">${cp != null ? 'des ventes, ' : ''}${k7.nCasse} ligne${k7.nCasse > 1 ? 's' : ''}</div></div>
+    <div class="kpi"><div class="l">Valeur au prix d'achat</div><div class="v">${money(eur(k7.casse), '•••• €')}</div><div class="s">${k7.sansVal ? k7.sansVal + ' sans valeur' : '&nbsp;'}</div></div></div>` +
+    (ecart != null && Math.abs(ecart) >= 1 ? `<div class="alert a-${ecart > 0 ? 'warn' : 'acc'}" style="margin-top:8px">${ecart > 0 ? `Casse constatée supérieure de ${money(eur(ecart), '•••• €')} à la casse déclarée dans le système : non déclarée, elle finira en démarque inconnue.` : `Casse déclarée dans le système supérieure de ${money(eur(-ecart), '•••• €')} à la casse saisie ici.`}</div>` : '') +
+    `<button class="btn mt" onclick="setRay('${rid}');A.casseAdd()">Saisir une casse</button>` +
+    `<h2>Produits qui démarquent le plus, 4 semaines</h2>${tl.length ? `<div class="list">${tl.map(([n, x], i) => `<div class="row"><span class="muted" style="width:20px">${i + 1}</span><span class="grow">${esc(n)}</span><span class="small muted">${money(eur(x), '••• €')}</span><span class="${i < 3 ? 'bad' : ''}" style="min-width:44px;text-align:right">${nf(x / tt * 100, 0)} %</span></div>`).join('')}</div>` : '<div class="small muted">Pas encore de casse valorisée sur 4 semaines.</div>'}` +
+    `<h2>Dernières saisies</h2>${l.length ? `<div class="list">${l.slice(0, 25).map(c => `<div class="row"><span class="grow">${esc(c.nom)}<div class="small muted">${fDate(c.date, { day: 'numeric', month: 'short' })}, ${esc(c.motif || '')}, quantité ${nf(+c.qte, 2)}</div></span><span class="small">${+c.valeur ? money(eur(+c.valeur), '••• €') : '<span class="warn">sans valeur</span>'}</span><button class="del" onclick="if(confirm('Supprimer cette casse ?'))db.del('casse','${c.id}')" aria-label="Supprimer">×</button></div>`).join('')}</div>` : '<div class="small muted">Aucune casse sur 4 semaines.</div>'}`;
+}
+function rStock(r) { return `<div class="card"><b style="font-weight:600">Inventaires et démarque inconnue</b><div class="small muted mt">Resserre comptée et rayon estimé, valorisés au prix d'achat, puis calcul du delta entre deux inventaires : c'est la prochaine étape de la fusion.</div></div>`; }
+function rProduits(r) { const l = prods(r.id); return `<div class="list">${l.map(p => `<div class="row"><span class="grow">${esc(p.nom)}<div class="small muted">${p.code ? 'code ' + esc(p.code) : 'sans code-barres'}</div></span><button class="chip" onclick="A.pEdit('${p.id}')">Modifier</button></div>`).join('') || '<div class="empty">Les produits s\'ajoutent quand tu scannes une rupture, ou ici.</div>'}</div><button class="btn sec mt" onclick="S.prR='${r.id}';A.pEdit()">Ajouter un produit</button><div class="small muted mt">Prix d'achat, unités et stock par produit arrivent avec la troisième étape.</div>`; }
+function rCommandes(r) { return `<div class="card"><b style="font-weight:600">Commandes</b><div class="small muted mt">Calcul et contrôle des commandes, une fois les stocks fiabilisés produit par produit.</div></div>`; }
+function rAnalyses(r) {
+  const d = today(), js = [...Array(14)].map((_, i) => addDays(d, -13 + i));
+  const pts = js.map(j => { const k = kJ(j, j, r.id); return { j, k, c: ratio(k.casse, k.ventes) }; });
+  const mx = Math.max(0.5, ...pts.map(x => x.c || 0)), W = 336, H = 110, bw = W / 14;
+  const g = pts.some(x => x.c != null) ? `<svg viewBox="0 0 ${W} ${H + 18}" width="100%" role="img" aria-label="Casse en pourcentage des ventes, 14 jours">${pts.map((x, i) => { const h = x.c == null ? 0 : Math.max(2, x.c / mx * H); return `<g><title>${fDate(x.j, { day: 'numeric', month: 'short' })} : ${x.c == null ? 'pas de ventes saisies' : nf(x.c, 1) + ' %'}</title><rect x="${i * bw + 3}" y="${H - (x.c == null ? 2 : h)}" width="${bw - 6}" height="${x.c == null ? 2 : h}" rx="2" fill="${x.c == null ? 'var(--line)' : r.couleur}"/><text x="${i * bw + bw / 2}" y="${H + 14}" text-anchor="middle" font-size="10" fill="var(--muted)">${+x.j.slice(8)}</text></g>`; }).join('')}</svg><div class="small muted">Maximum ${nf(mx, 1)} %</div>` : '<div class="small muted">Le graphique apparaît dès que les ventes du jour sont saisies.</div>';
+  return `<h2 style="margin-top:4px">Casse en % des ventes, 14 jours</h2><div class="card">${g}</div>
+    <h2>Jour par jour</h2><div class="card" style="overflow-x:auto"><table class="t14"><tr><th>Jour</th><th>CA</th><th>Achats</th><th>Casse</th><th>%</th></tr>${pts.slice().reverse().map(x => `<tr><td>${fDate(x.j, { weekday: 'short', day: 'numeric' })}</td><td>${x.k.ventes != null ? money(eur(x.k.ventes), '•••') : '—'}</td><td>${x.k.achats != null ? money(eur(x.k.achats), '•••') : '—'}</td><td>${x.k.nCasse ? money(eur(x.k.casse), '•••') : '—'}</td><td>${x.c != null ? nf(x.c, 1) : '—'}</td></tr>`).join('')}</table></div>
+    <div class="list mt">${lk('#/tendances', 'Évolution sur 52 semaines')}${lk('#/tdb', 'Tableau de bord de la semaine')}</div>`;
+}
+
+// ---------- Chiffres du jour ----------
+V['saisie-chiffres'] = d0 => {
+  const d = d0 || addDays(today(), -1);
+  const v = x => x == null ? '' : x;
+  return hdr('Chiffres du jour', jLbl(d), 1) +
+    `<div class="seg" style="margin-bottom:10px"><button onclick="location.hash='#/saisie-chiffres/${addDays(d, -1)}'">‹ Veille</button><button onclick="location.hash='#/saisie-chiffres/${today()}'">Aujourd'hui</button><button ${d >= today() ? 'disabled' : ''} onclick="location.hash='#/saisie-chiffres/${addDays(d, 1)}'">Lendemain ›</button></div>
+    <div class="small muted" style="margin-bottom:10px">Montants HT par rayon, repris des éditions du magasin. La casse se calcule à partir de tes saisies.</div>` +
+    rayons().map(r => { const c = chDoc(d, r.id), k = kJ(d, d, r.id); return `<div class="card" style="margin-bottom:8px;border-left:5px solid ${r.couleur}"><div style="display:flex;justify-content:space-between;margin-bottom:6px"><b style="font-weight:600">${esc(r.nom)}</b><span class="small muted">casse saisie ${k.nCasse ? money(eur(k.casse), '•••') : 'aucune'}</span></div><div class="grid2">
+      <label class="small muted">Ventes HT (€)<input type="number" inputmode="decimal" step="any" ${tiS} data-cj="${r.id}" data-k="ventes" value="${v(c.ventes)}"></label>
+      <label class="small muted">Achats HT (€)<input type="number" inputmode="decimal" step="any" ${tiS} data-cj="${r.id}" data-k="achats" value="${v(c.achats)}"></label></div>
+      <label class="small muted" style="display:block;margin-top:6px">Casse déclarée dans le système (€, facultatif)<input type="number" inputmode="decimal" step="any" ${tiS} data-cj="${r.id}" data-k="casseSys" value="${v(c.casseSys)}"></label></div>`; }).join('') +
+    `<button class="btn" onclick="A.cjSave('${d}')">Enregistrer</button>`;
+};
+A.cjSave = d => {
+  const m = {};
+  document.querySelectorAll('[data-cj]').forEach(i => { (m[i.dataset.cj] = m[i.dataset.cj] || {})[i.dataset.k] = i.value === '' ? null : Math.round(+String(i.value).replace(',', '.') * 100) / 100; });
+  Object.entries(m).forEach(([r, o]) => { const c = chDoc(d, r); if (Object.keys(o).some(k => (c[k] ?? null) !== o[k])) db.put('chiffres', { ...c, ...o }); });
+  toast('Chiffres enregistrés'); S.hjD = d; location.hash = '#/';
+};
+
+// ---------- Météo (Open-Meteo, sans clé, mise en cache 3 h) ----------
+const WMO = c => c === 0 ? ['☀️', 'Ensoleillé'] : c <= 2 ? ['🌤️', 'Éclaircies'] : c === 3 ? ['☁️', 'Couvert'] : c <= 48 ? ['🌫️', 'Brouillard'] : (c <= 67 || (c >= 80 && c <= 82)) ? ['🌧️', 'Pluie'] : (c <= 77 || c === 85 || c === 86) ? ['🌨️', 'Neige'] : ['⛈️', 'Orage'];
+async function meteoFill() {
+  let m = null; try { m = JSON.parse(ls('frais_meteo') || 'null'); } catch (e) {}
+  if (!m || Date.now() - m.t > 3 * 36e5) {
+    try { const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=47.62&longitude=6.15&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Europe%2FParis&forecast_days=3'); const j = await res.json(); if (j.daily) { m = { t: Date.now(), d: j.daily }; lset('frais_meteo', JSON.stringify(m)); } } catch (e) {}
+  }
+  const el = $('#meteo'); if (!el) return;
+  if (!m) { el.innerHTML = '<span class="small muted" style="grid-column:1/-1">Météo indisponible pour le moment (pas de connexion).</span>'; return; }
+  const D = m.d;
+  el.innerHTML = D.time.map((t, i) => { const [ico, l] = WMO(D.weather_code[i]); return `<div><div class="small muted">${i === 0 ? 'Aujourd\'hui' : i === 1 ? 'Demain' : cap(fDate(t, { weekday: 'long' }))}</div><div class="mw">${ico} ${Math.round(D.temperature_2m_max[i])}°</div><div class="small muted">${l}, min ${Math.round(D.temperature_2m_min[i])}°${D.precipitation_probability_max && D.precipitation_probability_max[i] != null ? `, pluie ${D.precipitation_probability_max[i]} %` : ''}</div></div>`; }).join('');
+}
+window.setRay = setRay; window.db = db;
+
 const ic = { home: '<path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/>', plus: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/>', histo: '<path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="8"/>', plan: '<path d="M5 5h14M5 12h14M5 19h9"/><circle cx="19" cy="19" r="1.5"/>', more: '<path d="M4 7h16M4 12h16M4 17h16"/>', chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>', team: '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6M15 20c0-2.5 1-4.5 3-4.5s3 1.7 3 4.5"/>' };
-const tabs = [['', 'Journée', 'home'], ['saisir', 'Saisir', 'plus'], ['equipes', 'Équipes', 'team'], ['pilotage', 'Pilotage', 'chart'], ['plus', 'Plus', 'more']];
-const tabOf = { histo: 'plus', tdb: 'pilotage', tendances: 'pilotage', previsions: 'pilotage', couverture: 'pilotage', simulateur: 'pilotage', demarque: 'saisir', action: 'pilotage', plans: 'pilotage', 'plan-rayon': 'pilotage', rapports: 'pilotage', chiffres: 'pilotage', 'r-mardi': 'pilotage', 'r-mensuel': 'pilotage', 'r-pilote': 'pilotage', 'r-restit': 'pilotage', 'r-fetes': 'pilotage', 'r-objectifs': 'pilotage', poly: 'equipes', entretiens: 'equipes', entretien: 'equipes', 'entretien-new': 'equipes', 'r-taches': 'equipes', tournee: 'saisir', ruptures: 'saisir', bilan: 'saisir', suivis: 'plus', obs: 'plus', 'obs-detail': 'plus', evolution: 'plus', galerie: 'plus', 'ruptures-stats': 'plus', journal: 'plus', actions: 'pilotage', raccourcis: 'plus', reglages: 'plus', plan: 'plus', fetes: 'saisir', retrait: 'saisir', carnet: 'saisir', presents: 'equipes', planning: 'equipes', interim: 'equipes', personnes: 'equipes', personne: 'equipes' };
+const tabs = [['', 'Accueil', 'home'], ['saisir', 'Saisir', 'plus'], ['equipes', 'Équipes', 'team'], ['pilotage', 'Pilotage', 'chart'], ['plus', 'Plus', 'more']];
+const tabOf = { journee: '', rayon: '', 'saisie-chiffres': 'saisir', histo: 'plus', tdb: 'pilotage', tendances: 'pilotage', previsions: 'pilotage', couverture: 'pilotage', simulateur: 'pilotage', demarque: 'saisir', action: 'pilotage', plans: 'pilotage', 'plan-rayon': 'pilotage', rapports: 'pilotage', chiffres: 'pilotage', 'r-mardi': 'pilotage', 'r-mensuel': 'pilotage', 'r-pilote': 'pilotage', 'r-restit': 'pilotage', 'r-fetes': 'pilotage', 'r-objectifs': 'pilotage', poly: 'equipes', entretiens: 'equipes', entretien: 'equipes', 'entretien-new': 'equipes', 'r-taches': 'equipes', tournee: 'saisir', ruptures: 'saisir', bilan: 'saisir', suivis: 'plus', obs: 'plus', 'obs-detail': 'plus', evolution: 'plus', galerie: 'plus', 'ruptures-stats': 'plus', journal: 'plus', actions: 'pilotage', raccourcis: 'plus', reglages: 'plus', plan: 'plus', fetes: 'saisir', retrait: 'saisir', carnet: 'saisir', presents: 'equipes', planning: 'equipes', interim: 'equipes', personnes: 'equipes', personne: 'equipes' };
 let dirty = false;
 function render() {
   const [route, param] = (location.hash.replace(/^#\/?/, '') || '').split('/');
@@ -1078,6 +1205,7 @@ function render() {
   $('#app').innerHTML = f(param ? decodeURIComponent(param) : undefined);
   $('#nav').innerHTML = tabs.map(([u, l, i]) => `<a href="#/${u}" class="${u === (V[tab] ? tab : '') ? 'on' : ''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">${ic[i]}</svg>${l}</a>`).join('');
   lazyPhotos();
+  if ($('#meteo')) meteoFill();
 }
 window.render = render; window.S = S; window.$ = $;
 db.onChange(() => {

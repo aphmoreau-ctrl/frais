@@ -1,4 +1,4 @@
-# Rayons frais — Version 1
+# Rayons frais — application unique (version 5)
 
 Appli personnelle de suivi quotidien des rayons frais : tournée guidée, suivis, températures, ruptures (avec scan), journal, bilan du soir, plan, réglages. Fonctionne hors ligne sur iPhone, iPad et ordinateur, synchronisée par Firebase.
 
@@ -59,6 +59,14 @@ Le 1er de chaque mois, l'appli te le rappelle : **Réglages → Données → Té
 - **Suppression** : les éléments supprimés restent 30 jours dans la corbeille, puis sont effacés définitivement.
 - **RGPD** : aucun champ ne sert à juger une personne. Les commentaires portent sur des faits.
 - **Mise à jour** : quand une nouvelle version est envoyée sur GitHub, ferme et rouvre l'appli (deux fois si besoin) pour la charger.
+
+## Nouveautés de la version 5 (fusion avec Stocks, étape 1)
+
+- **Accueil** : la prochaine tâche et les alertes, puis une carte par rayon (CA, casse en % des ventes, marge de la semaine, évolution par rapport au même jour de la semaine précédente). Flèches pour remonter les jours. L'ancienne page « Journée » est accessible par « Ma journée ».
+- **Page rayon** (touche une carte) avec ses onglets : Aujourd'hui (chiffres, météo pour les fruits et légumes, points ouverts), Casse, Stock, Produits, Commandes, Analyses (14 jours).
+- **Chiffres du jour** (Saisir ou Pilotage) : ventes HT, achats HT et casse déclarée dans le système, par rayon. Le CA et la démarque de la semaine se calculent à partir d'eux.
+- **Démarque** : uniquement la marchandise sortie sans être vendue. Les lots remisés sont retirés ; motifs complétés ; valeur au prix d'achat.
+- Étapes suivantes : inventaires et démarque inconnue, puis fiches produits et stock par produit.
 
 ## Contenu de la V1
 
